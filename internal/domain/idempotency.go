@@ -12,6 +12,7 @@ import (
 var (
 	ErrInvalidIdempotencyKey = errors.New("invalid idempotency key")
 	ErrIdempotencyConflict   = errors.New("idempotency key reused with a different request")
+	ErrIdempotencyInProgress = errors.New("idempotent request is still in progress")
 )
 
 type CreatePaymentRequest struct {
@@ -35,8 +36,13 @@ func ValidateIdempotencyKey(key string) error {
 }
 
 func HashCreatePaymentRequest(request CreatePaymentRequest) ([sha256.Size]byte, error) {
-	if request.AmountMinor <= 0 || !validCurrency(request.Currency) {
+	if request.AmountMinor <= 0 || !validCurrency(request.Currency) || len(request.CustomerRef) > 128 || len(request.Description) > 255 || len(request.Metadata) > 50 {
 		return [sha256.Size]byte{}, ErrInvalidPayment
+	}
+	for key, value := range request.Metadata {
+		if len(key) == 0 || len(key) > 40 || len(value) > 500 {
+			return [sha256.Size]byte{}, ErrInvalidPayment
+		}
 	}
 	payload, err := json.Marshal(request)
 	if err != nil {
