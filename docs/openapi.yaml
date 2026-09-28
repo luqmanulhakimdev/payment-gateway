@@ -2,10 +2,22 @@ openapi: 3.1.0
 info:
   title: Payment Gateway API
   version: 0.1.0
-  description: Initial service contract. Business endpoints will be added with their implementation.
+  description: Portfolio and educational payment gateway. Do not submit card data.
 servers:
   - url: http://localhost:8081
 paths:
+  /healthz:
+    get:
+      operationId: healthCheck
+      summary: Check process health
+      responses:
+        '200':
+          description: The HTTP process is running
+          content:
+            text/plain:
+              schema:
+                type: string
+              example: ok
   /readyz:
     get:
       operationId: readinessCheck
@@ -20,15 +32,92 @@ paths:
               example: ready
         '503':
           description: Database is unavailable
-  /healthz:
-    get:
-      operationId: healthCheck
-      summary: Check process health
+  /v1/payment-intents:
+    post:
+      operationId: createPaymentIntent
+      summary: Create an idempotent payment intent
+      security:
+        - MerchantBearer: []
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 255
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreatePaymentIntentRequest'
       responses:
-        '200':
-          description: The HTTP process is running
+        '201':
+          description: Payment intent created or replayed
           content:
-            text/plain:
+            application/json:
               schema:
-                type: string
-              example: ok
+                $ref: '#/components/schemas/PaymentIntent'
+        '400':
+          description: Invalid request or missing idempotency key
+        '401':
+          description: Merchant API key is invalid
+        '404':
+          description: Customer does not exist for this merchant
+        '409':
+          description: Idempotency key was used for a different request
+        '415':
+          description: Content type must be application/json
+        '500':
+          description: Payment intent could not be created
+components:
+  securitySchemes:
+    MerchantBearer:
+      type: http
+      scheme: bearer
+      bearerFormat: random merchant API key
+  schemas:
+    CreatePaymentIntentRequest:
+      type: object
+      additionalProperties: false
+      required: [amount_minor, currency]
+      properties:
+        amount_minor:
+          type: integer
+          format: int64
+          minimum: 1
+        currency:
+          type: string
+          pattern: '^[A-Z]{3}$'
+        customer_ref:
+          type: string
+          maxLength: 128
+        description:
+          type: string
+          maxLength: 255
+        metadata:
+          type: object
+          maxProperties: 50
+          additionalProperties:
+            type: string
+            maxLength: 500
+    PaymentIntent:
+      type: object
+      required: [id, status, amount_minor, currency, created_at]
+      properties:
+        id:
+          type: string
+          example: pi_8bdf9f
+        status:
+          type: string
+          enum: [CREATED, PENDING, AUTHORIZED, PAID, FAILED, EXPIRED, CANCELLED, REFUNDED]
+        amount_minor:
+          type: integer
+          format: int64
+        currency:
+          type: string
+          pattern: '^[A-Z]{3}$'
+        created_at:
+          type: string
+          format: date-time

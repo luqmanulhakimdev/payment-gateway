@@ -32,10 +32,17 @@ func TestCreateIntentIntegrationIdempotency(t *testing.T) {
 	}
 
 	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	plainKey, keyHash, err := application.GenerateMerchantAPIKey()
+	if err != nil {
+		t.Fatal(err)
+	}
 	var merchantID int64
 	if err := pool.QueryRow(ctx, `INSERT INTO merchants (name, api_key_hash)
-		VALUES ($1, $2) RETURNING id`, "Integration "+suffix, "test-hash-"+suffix).Scan(&merchantID); err != nil {
+		VALUES ($1, $2) RETURNING id`, "Integration "+suffix, keyHash).Scan(&merchantID); err != nil {
 		t.Fatal(err)
+	}
+	if authenticatedID, err := postgres.NewMerchantAuthenticator(pool).Authenticate(ctx, plainKey); err != nil || authenticatedID != merchantID {
+		t.Fatalf("merchant authentication returned id=%d, error=%v", authenticatedID, err)
 	}
 	t.Cleanup(func() { cleanupIntentFixture(pool, merchantID) })
 

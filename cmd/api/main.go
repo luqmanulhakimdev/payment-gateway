@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/luqmanulhakimdev/payment-gateway/internal/application"
 	"github.com/luqmanulhakimdev/payment-gateway/internal/infrastructure/postgres"
 	httpapi "github.com/luqmanulhakimdev/payment-gateway/internal/interfaces/http"
 )
@@ -36,7 +37,9 @@ func run() error {
 	if addr == "" {
 		addr = ":8081"
 	}
-	server := &http.Server{Addr: addr, Handler: httpapi.NewRouter(pool.Ping), ReadHeaderTimeout: 5 * time.Second}
+	createIntent := application.NewCreateIntent(postgres.NewIntentStore(pool))
+	authenticator := postgres.NewMerchantAuthenticator(pool)
+	server := &http.Server{Addr: addr, Handler: httpapi.NewRouter(pool.Ping, createIntent, authenticator), ReadHeaderTimeout: 5 * time.Second}
 	shutdownCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	go func() {

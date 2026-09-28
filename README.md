@@ -10,12 +10,12 @@ Pragmatic hexagonal architecture separates domain, application ports, infrastruc
 
 - Go HTTP service with process health and database readiness endpoints
 - PostgreSQL schema migrations applied transactionally at startup
-- Payment lifecycle transition rules, refund amount checks, and merchant-scoped idempotency request hashing
+- Merchant API key generation and authentication; idempotent payment-intent creation; payment lifecycle transition rules and refund amount checks
 - `PaymentProvider` port and deterministic `MockPaymentProvider` adapter, with no card-data fields
 - HMAC-SHA256 webhook signature verifier with constant-time comparison and timestamp tolerance
 - Docker Compose and GitHub Actions CI with PostgreSQL migration integration tests
 
-The payment creation, webhook persistence/processing, refund, and reconciliation HTTP workflows are still in progress.
+Payment attempt, webhook persistence/processing, refund, and reconciliation workflows are still in progress.
 
 ## Tech stack
 
@@ -76,7 +76,7 @@ curl -i http://localhost:8081/healthz
 curl -i http://localhost:8081/readyz
 ```
 
-See [docs/api.md](docs/api.md) and the [OpenAPI contract](docs/openapi.yaml).
+See [docs/api.md](docs/api.md) and the [OpenAPI contract](docs/openapi.yaml). Create intents with a merchant bearer key and an `Idempotency-Key`; the example contains no card data.
 
 ## Testing
 
@@ -94,7 +94,7 @@ Payment creation request bodies are hashed for same-key/different-request confli
 
 ## Refund and reconciliation
 
-Refund totals are checked against the captured amount by domain rules. The persistence workflow, provider calls, and reconciliation jobs are planned implementation steps.
+Refund totals are checked against the captured amount by domain rules. The payment attempt provider call, refund persistence, and reconciliation jobs are planned implementation steps.
 
 ## Security considerations
 
