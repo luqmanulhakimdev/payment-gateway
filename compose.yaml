@@ -1,0 +1,27 @@
+services:
+  app:
+    build:
+      context: .
+    env_file: .env
+    ports:
+      - "${HTTP_PORT:-8081}:8081"
+    depends_on:
+      postgres:
+        condition: service_healthy
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: payment_gateway
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: app
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U app -d payment_gateway"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+volumes:
+  postgres_data:
