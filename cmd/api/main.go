@@ -41,6 +41,7 @@ func run() error {
 		addr = ":8081"
 	}
 	createIntent := application.NewCreateIntent(postgres.NewIntentStore(pool))
+	getPaymentStatus := application.NewGetPaymentStatus(postgres.NewPaymentStatusStore(pool))
 	provider := mockprovider.New()
 	createAttempt := application.NewCreatePaymentAttempt(postgres.NewAttemptStore(pool), provider)
 	createRefund := application.NewCreateRefund(postgres.NewRefundStore(pool), provider)
@@ -58,7 +59,7 @@ func run() error {
 	}
 	handleWebhook := application.NewHandleWebhook(postgres.NewWebhookStore(pool), webhookKey, rateLimiter)
 	authenticator := postgres.NewMerchantAuthenticator(pool)
-	server := &http.Server{Addr: addr, Handler: httpapi.NewRouter(pool.Ping, createIntent, authenticator, createRefund, createAttempt, handleWebhook, rateLimiter), ReadHeaderTimeout: 5 * time.Second}
+	server := &http.Server{Addr: addr, Handler: httpapi.NewRouter(pool.Ping, createIntent, authenticator, createRefund, createAttempt, handleWebhook, rateLimiter, getPaymentStatus), ReadHeaderTimeout: 5 * time.Second}
 	shutdownCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	go func() {

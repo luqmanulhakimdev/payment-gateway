@@ -17,6 +17,7 @@ Pragmatic hexagonal architecture separates domain, application ports, infrastruc
 - Signed webhook intake with encrypted merchant secrets, persistent event deduplication, and transactional payment state updates
 - Batch reconciliation for stale pending attempts against the provider's stable idempotency reference
 - Merchant-scoped partial/full refund API with idempotency, locked refund reservations, mock provider refunds, and audit records
+- Merchant-scoped payment status lookup with per-operation rate limiting
 - Docker Compose and GitHub Actions CI with PostgreSQL migration integration tests
 
 Payment attempts return `AUTHORIZED`; refunds require a `PAID` intent from a provider event. The mock adapters return deterministic references and do not process real transactions. See [ADR 004](docs/adr/004-idempotent-payment-attempts.md) for retry behavior, [ADR 006](docs/adr/006-payment-reconciliation.md) for reconciliation, and [ADR 007](docs/adr/007-rate-limiting.md) for API rate limits.

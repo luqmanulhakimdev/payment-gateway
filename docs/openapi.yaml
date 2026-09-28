@@ -106,6 +106,23 @@ paths:
         '500': { description: Internal refund processing failure }
         '429': { description: Merchant rate limit exceeded; see Retry-After }
         '503': { description: Rate limit storage unavailable }
+  /v1/payment-intents/{intentID}:
+    get:
+      operationId: getPaymentIntentStatus
+      summary: Get a merchant-scoped payment intent status
+      security: [{ MerchantBearer: [] }]
+      parameters:
+        - { name: intentID, in: path, required: true, schema: { type: string, minLength: 1 } }
+      responses:
+        '200':
+          description: Current payment intent status
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PaymentIntentStatus' }
+        '401': { description: Merchant API key is invalid }
+        '404': { description: Payment intent not found for this merchant }
+        '429': { description: Merchant rate limit exceeded; see Retry-After }
+        '503': { description: Rate limit storage unavailable }
   /v1/payment-intents/{intentID}/attempts:
     post:
       operationId: createPaymentAttempt
@@ -163,6 +180,17 @@ components:
       scheme: bearer
       bearerFormat: random merchant API key
   schemas:
+    PaymentIntentStatus:
+      type: object
+      additionalProperties: false
+      required: [id, amount_minor, currency, status, created_at, updated_at]
+      properties:
+        id: { type: string }
+        amount_minor: { type: integer, format: int64 }
+        currency: { type: string, minLength: 3, maxLength: 3 }
+        status: { type: string, enum: [CREATED, PENDING, AUTHORIZED, PAID, FAILED, EXPIRED, CANCELLED, REFUNDED] }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
     CreatePaymentIntentRequest:
       type: object
       additionalProperties: false

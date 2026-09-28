@@ -24,7 +24,7 @@ type RequestRateLimiter interface {
 	Check(context.Context, int64, string) (bool, time.Duration, error)
 }
 
-func NewRouter(checkDatabase func(context.Context) error, createIntent *application.CreateIntent, authenticator MerchantAuthenticator, createRefund *application.CreateRefund, createAttempt *application.CreatePaymentAttempt, handleWebhook *application.HandleWebhook, rateLimiter RequestRateLimiter) http.Handler {
+func NewRouter(checkDatabase func(context.Context) error, createIntent *application.CreateIntent, authenticator MerchantAuthenticator, createRefund *application.CreateRefund, createAttempt *application.CreatePaymentAttempt, handleWebhook *application.HandleWebhook, rateLimiter RequestRateLimiter, getPaymentStatus *application.GetPaymentStatus) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
@@ -43,10 +43,46 @@ func NewRouter(checkDatabase func(context.Context) error, createIntent *applicat
 		_, _ = w.Write([]byte("ready\n"))
 	})
 	mux.Handle("POST /v1/payment-intents", createIntentHandler{useCase: createIntent, authenticator: authenticator, rateLimiter: rateLimiter})
+	mux.Handle("GET /v1/payment-intents/{intentID}", paymentStatusHandler{useCase: getPaymentStatus, authenticator: authenticator, rateLimiter: rateLimiter})
 	mux.Handle("POST /v1/payment-intents/{intentID}/refunds", createRefundHandler{useCase: createRefund, authenticator: authenticator, rateLimiter: rateLimiter})
 	mux.Handle("POST /v1/payment-intents/{intentID}/attempts", createAttemptHandler{useCase: createAttempt, authenticator: authenticator, rateLimiter: rateLimiter})
 	mux.Handle("POST /v1/webhooks/{merchantID}/{provider}", webhookHandler{useCase: handleWebhook})
 	return mux
+}
+
+type paymentStatusHandler struct {
+	useCase       *application.GetPaymentStatus
+	authenticator MerchantAuthenticator
+	rateLimiter   RequestRateLimiter
+}
+
+func (h paymentStatusHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if h.useCase == nil || h.authenticator == nil {
+		writeError(w, http.StatusServiceUnavailable, "service_unavailable", "payment status service is not configured")
+		return
+	}
+	merchantID, ok := (createIntentHandler{authenticator: h.authenticator}).authenticate(w, r)
+	if !ok {
+		return
+	}
+	if !allowRequest(w, r, h.rateLimiter, merchantID, "payment-status") {
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+	defer cancel()
+	status, err := h.useCase.Execute(ctx, merchantID, r.PathValue("intentID"))
+	if err != nil {
+		if errors.Is(err, application.ErrPaymentStatusNotFound) {
+			writeError(w, http.StatusNotFound, "payment_intent_not_found", "Payment intent does not exist")
+		} else if errors.Is(err, domain.ErrInvalidPayment) {
+			writeError(w, http.StatusBadRequest, "invalid_request", "Payment intent ID is invalid")
+		} else {
+			writeError(w, http.StatusInternalServerError, "internal_error", "Payment status could not be loaded")
+		}
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(status)
 }
 
 type webhookHandler struct{ useCase *application.HandleWebhook }
