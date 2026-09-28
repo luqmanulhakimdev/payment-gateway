@@ -1,28 +1,48 @@
 # Payment Gateway
 
-An educational payment gateway backend demonstrating payment lifecycle, idempotency, webhooks, refunds, and reconciliation.
-
-> Portfolio and educational project. The payment gateway does not process real card data. Never submit real card numbers, CVV, or credentials.
+An educational payment gateway backend demonstrating payment lifecycle, idempotency, signed webhooks, refunds, and reconciliation. This is a portfolio project and does not process real card data. Never submit real card numbers, CVV, or sensitive payment credentials.
 
 ## Architecture
 
-Pragmatic hexagonal architecture separates domain rules, application use cases, infrastructure adapters, and HTTP interfaces. See [architecture](docs/architecture.md) and the [architecture decision record](docs/adr/001-architecture.md).
+Pragmatic hexagonal architecture separates domain, application ports, infrastructure adapters, and HTTP interfaces. PostgreSQL is the source of truth and `pgx` provides the bounded connection pool. See [architecture](docs/architecture.md), [database design](docs/database.md), and [architecture decisions](docs/adr/).
 
-## Features
+## Implemented baseline
 
-- Go HTTP service with health endpoint
-- PostgreSQL local development environment
-- Domain and persistence structure prepared for the planned capabilities: Merchants and customers; payment intents and attempts; payment methods; idempotency; signed webhooks; refunds; reconciliation; audit logs; rate limiting.
+- Go HTTP service with process health and database readiness endpoints
+- PostgreSQL schema migrations applied transactionally at startup
+- Payment lifecycle transition rules, refund amount checks, and merchant-scoped idempotency request hashing
+- `PaymentProvider` port and deterministic `MockPaymentProvider` adapter, with no card-data fields
+- HMAC-SHA256 webhook signature verifier with constant-time comparison and timestamp tolerance
+- Docker Compose and GitHub Actions CI with PostgreSQL migration integration tests
 
-Business flows are added incrementally; the current baseline does not claim these features are implemented.
+The payment creation, webhook persistence/processing, refund, and reconciliation HTTP workflows are still in progress.
 
 ## Tech stack
 
-Go 1.23, PostgreSQL 16, Docker Compose, GitHub Actions.
+Go 1.23, PostgreSQL 16, Docker Compose, GitHub Actions. Redis is not included yet; database constraints provide durable idempotency and PostgreSQL supports this initial scope.
+
+## State machine
+
+```mermaid
+stateDiagram-v2
+  [*] --> CREATED
+  CREATED --> PENDING
+  CREATED --> CANCELLED
+  CREATED --> EXPIRED
+  PENDING --> AUTHORIZED
+  PENDING --> PAID
+  PENDING --> FAILED
+  PENDING --> EXPIRED
+  PENDING --> CANCELLED
+  AUTHORIZED --> PAID
+  AUTHORIZED --> FAILED
+  AUTHORIZED --> CANCELLED
+  PAID --> REFUNDED
+```
 
 ## ERD
 
-See [docs/erd.md](docs/erd.md) for the Mermaid diagram.
+See [docs/erd.md](docs/erd.md) for the Mermaid entity relationship diagram.
 
 ## Local setup
 
@@ -31,30 +51,32 @@ cp .env.example .env
 docker compose up --build
 # in another terminal
 curl -i http://localhost:8081/healthz
+curl -i http://localhost:8081/readyz
 ```
 
-The Compose database credentials are for local development only. Do not reuse them outside local development.
+Compose credentials are for local development only. Do not reuse them outside local development.
 
 ## Environment variables
 
 | Variable | Purpose | Default |
 | --- | --- | --- |
-| `APP_ENV` | Runtime environment | `development` |
-| `HTTP_ADDR` | HTTP listen address | `:8081` |
-| `DATABASE_URL` | PostgreSQL connection | local Compose database |
-| `LOG_LEVEL` | Log verbosity | `debug` |
+| `HTTP_ADDR` | HTTP listen address in the container | `:8081` |
+| `HTTP_PORT` | Host API port | `8081` |
+| `POSTGRES_PORT` | Host PostgreSQL port | `5433` |
+| `DATABASE_URL` | Required PostgreSQL connection | Local Compose database |
 
 ## Migrations
 
-Ordered up/down SQL migrations live in `migrations/`. Apply the initial schema using the command in [migration instructions](migrations/README.md). See [database design](docs/database.md).
+The service applies pending ordered `.up.sql` files from `migrations/` at startup. See [migration instructions](migrations/README.md) and [database design](docs/database.md).
 
-## API example
+## API and OpenAPI
 
 ```sh
 curl -i http://localhost:8081/healthz
+curl -i http://localhost:8081/readyz
 ```
 
-Planned routes are documented in [docs/api.md](docs/api.md); the baseline OpenAPI contract is [docs/openapi.yaml](docs/openapi.yaml).
+See [docs/api.md](docs/api.md) and the [OpenAPI contract](docs/openapi.yaml).
 
 ## Testing
 
@@ -64,13 +86,20 @@ go vet ./...
 go build ./...
 ```
 
-Database integration tests will be added with persistence flows. CI currently runs formatting, vet, tests, and build.
+Unit tests run without a database. Set `TEST_DATABASE_URL` to run PostgreSQL migration integration tests. CI runs both unit and integration tests.
 
-## Design decisions
+## Idempotency and webhook security
 
-- Define a PaymentProvider port in the application boundary and begin with a deterministic MockPaymentProvider adapter. This demonstrates provider integration without processing or storing real card numbers, CVV, or sensitive credentials. PostgreSQL is the source of truth. Idempotency keys are unique per merchant and persisted transactionally with payment creation; webhook events are persisted and deduplicated before processing.
-- Detailed state transitions: `CREATED → PENDING → AUTHORIZED → PAID; PENDING → FAILED or EXPIRED; CREATED or PENDING → CANCELLED; PAID → REFUNDED`.
+Payment creation request bodies are hashed for same-key/different-request conflict detection. PostgreSQL enforces uniqueness by `(merchant_id, idempotency_key)`. Webhook signatures cover the timestamp and exact raw body; timestamp tolerance limits replay windows, while a database uniqueness constraint will deduplicate provider event IDs during processing.
+
+## Refund and reconciliation
+
+Refund totals are checked against the captured amount by domain rules. The persistence workflow, provider calls, and reconciliation jobs are planned implementation steps.
+
+## Security considerations
+
+The schema has no card number or CVV columns. Payment methods store provider references and safe display labels only. Merchant API key hashes can be verified without storing raw keys; webhook secrets must be encrypted at rest because signature verification requires the original secret. Keep encryption keys and any provider credentials in deployment secret storage.
 
 ## Future improvements
 
-Implement schema migrations and use cases incrementally, publish an OpenAPI contract, add unit and PostgreSQL integration tests, and add operational metrics and tracing.
+Implement merchant authentication, transactional idempotent payment creation, durable webhook retries, refunds, reconciliation jobs, rate limiting, and operational metrics and tracing.

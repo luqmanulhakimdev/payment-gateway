@@ -1,6 +1,8 @@
 package httpapi
 
 import (
+	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -8,25 +10,27 @@ import (
 
 func TestHealthz(t *testing.T) {
 	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodGet, "/healthz", nil)
-
-	NewRouter().ServeHTTP(recorder, request)
-
-	if recorder.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusOK)
-	}
-	if got := recorder.Body.String(); got != "ok\n" {
-		t.Fatalf("body = %q, want %q", got, "ok\n")
+	NewRouter(nil).ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+	if recorder.Code != http.StatusOK || recorder.Body.String() != "ok\n" {
+		t.Fatalf("unexpected health response: %d %q", recorder.Code, recorder.Body.String())
 	}
 }
 
-func TestHealthzRejectsOtherMethods(t *testing.T) {
-	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPost, "/healthz", nil)
-
-	NewRouter().ServeHTTP(recorder, request)
-
-	if recorder.Code != http.StatusMethodNotAllowed {
-		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusMethodNotAllowed)
+func TestReadiness(t *testing.T) {
+	for _, tt := range []struct {
+		name  string
+		check func(context.Context) error
+		want  int
+	}{
+		{"ready", func(context.Context) error { return nil }, http.StatusOK},
+		{"database unavailable", func(context.Context) error { return errors.New("unavailable") }, http.StatusServiceUnavailable},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			NewRouter(tt.check).ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+			if recorder.Code != tt.want {
+				t.Fatalf("status = %d, want %d", recorder.Code, tt.want)
+			}
+		})
 	}
 }

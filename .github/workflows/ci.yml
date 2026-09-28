@@ -1,7 +1,7 @@
 name: CI
 on:
   push:
-    branches: [main, develop]
+    branches: [main, develop, 'feat/**']
   pull_request:
     branches: [main, develop]
 permissions:
@@ -9,6 +9,20 @@ permissions:
 jobs:
   verify:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: payment_gateway_test
+          POSTGRES_USER: app
+          POSTGRES_PASSWORD: app
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U app -d payment_gateway_test"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -20,6 +34,12 @@ jobs:
       - name: Vet
         run: go vet ./...
       - name: Unit tests
+        env:
+          TEST_DATABASE_URL: ""
         run: go test ./...
+      - name: Integration tests
+        env:
+          TEST_DATABASE_URL: postgres://app:app@localhost:5432/payment_gateway_test?sslmode=disable
+        run: go test ./internal/infrastructure/postgres -run Integration -count=1
       - name: Build
         run: go build ./...

@@ -6,6 +6,20 @@ info:
 servers:
   - url: http://localhost:8081
 paths:
+  /readyz:
+    get:
+      operationId: readinessCheck
+      summary: Check database readiness
+      responses:
+        '200':
+          description: Database is reachable
+          content:
+            text/plain:
+              schema:
+                type: string
+              example: ready
+        '503':
+          description: Database is unavailable
   /healthz:
     get:
       operationId: healthCheck
