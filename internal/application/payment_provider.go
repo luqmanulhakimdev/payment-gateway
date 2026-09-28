@@ -18,6 +18,8 @@ type ProviderRequest struct {
 type ProviderStatus string
 
 const ProviderAuthorized ProviderStatus = "AUTHORIZED"
+const ProviderPaid ProviderStatus = "PAID"
+const ProviderFailed ProviderStatus = "FAILED"
 
 type ProviderResult struct {
 	Reference string
@@ -43,4 +45,10 @@ type RefundProviderResult struct{ Reference string }
 
 type RefundProvider interface {
 	Refund(context.Context, RefundProviderRequest) (RefundProviderResult, error)
+}
+
+// PaymentReconciler looks up a previously submitted attempt by its stable provider idempotency key.
+type PaymentReconciler interface {
+	Name() string
+	LookupPayment(context.Context, ProviderRequest) (ProviderResult, error)
 }

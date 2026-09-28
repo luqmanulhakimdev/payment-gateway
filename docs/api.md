@@ -11,6 +11,8 @@ Base URL: `http://localhost:8081`.
 
 Create a local merchant with `MERCHANT_NAME="Demo" DATABASE_URL=... WEBHOOK_ENCRYPTION_KEY=... go run ./cmd/create-merchant`. Save the printed API key and webhook signing secret securely; the command prints them only once.
 
+Reconciliation is a scheduled CLI job rather than a merchant HTTP endpoint: `DATABASE_URL=... RECONCILIATION_OLDER_THAN=5m RECONCILIATION_BATCH_SIZE=100 go run ./cmd/reconcile`. Its JSON report includes checked, updated, unchanged, and failed counts. A nonzero exit signals that a run had provider or persistence failures and should be retried/alerted.
+
 ```sh
 curl -X POST http://localhost:8081/v1/payment-intents \
   -H 'Authorization: Bearer YOUR_MERCHANT_API_KEY' \

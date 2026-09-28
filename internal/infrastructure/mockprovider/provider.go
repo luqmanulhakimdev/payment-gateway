@@ -27,6 +27,15 @@ func (*Provider) CreatePayment(_ context.Context, request application.ProviderRe
 	}, nil
 }
 
+func (*Provider) LookupPayment(_ context.Context, request application.ProviderRequest) (application.ProviderResult, error) {
+	if strings.TrimSpace(request.PaymentIntentID) == "" || request.AttemptID <= 0 || request.IdempotencyKey != fmt.Sprintf("payment-attempt-%d", request.AttemptID) || request.AmountMinor <= 0 || !validCurrency(request.Currency) {
+		return application.ProviderResult{}, application.ErrInvalidProviderRequest
+	}
+	// The deterministic adapter models a provider that accepted the request even if the
+	// original HTTP response was lost. Real adapters query their provider by idempotency key.
+	return application.ProviderResult{Reference: fmt.Sprintf("mock_%s_%d", request.PaymentIntentID, request.AttemptID), Status: application.ProviderAuthorized}, nil
+}
+
 func (*Provider) Refund(_ context.Context, request application.RefundProviderRequest) (application.RefundProviderResult, error) {
 	if strings.TrimSpace(request.PaymentIntentID) == "" || strings.TrimSpace(request.ProviderReference) == "" || request.AmountMinor <= 0 || !validCurrency(request.Currency) || request.IdempotencyKey == "" {
 		return application.RefundProviderResult{}, application.ErrInvalidProviderRequest

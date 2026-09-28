@@ -15,10 +15,11 @@ Pragmatic hexagonal architecture separates domain, application ports, infrastruc
 - `PaymentProvider` port and deterministic `MockPaymentProvider` adapter, with no card-data fields
 - HMAC-SHA256 webhook signature verifier with constant-time comparison and timestamp tolerance
 - Signed webhook intake with encrypted merchant secrets, persistent event deduplication, and transactional payment state updates
+- Batch reconciliation for stale pending attempts against the provider's stable idempotency reference
 - Merchant-scoped partial/full refund API with idempotency, locked refund reservations, mock provider refunds, and audit records
 - Docker Compose and GitHub Actions CI with PostgreSQL migration integration tests
 
-Reconciliation and rate limiting remain in progress. Payment attempts return `AUTHORIZED`; refunds require a `PAID` intent from a provider event. The mock adapters return deterministic references and do not process real transactions. See [ADR 004](docs/adr/004-idempotent-payment-attempts.md) for retry behavior.
+Rate limiting remains in progress. Payment attempts return `AUTHORIZED`; refunds require a `PAID` intent from a provider event. The mock adapters return deterministic references and do not process real transactions. See [ADR 004](docs/adr/004-idempotent-payment-attempts.md) for retry behavior and [ADR 006](docs/adr/006-payment-reconciliation.md) for reconciliation.
 
 ## Tech stack
 
@@ -69,6 +70,8 @@ Compose credentials are for local development only. Do not reuse them outside lo
 | `POSTGRES_PORT` | Host PostgreSQL port | `5433` |
 | `DATABASE_URL` | Required PostgreSQL connection | Local Compose database |
 | `WEBHOOK_ENCRYPTION_KEY` | Base64 encoded 32 byte key used to encrypt merchant webhook secrets | Local development key in `.env.example` |
+| `RECONCILIATION_OLDER_THAN` | Minimum age for pending attempts selected by reconciliation | `5m` |
+| `RECONCILIATION_BATCH_SIZE` | Maximum attempts per reconciliation run | `100` |
 
 ## Migrations
 
@@ -102,6 +105,8 @@ Create a merchant once with `MERCHANT_NAME="Demo" DATABASE_URL=... WEBHOOK_ENCRY
 ## Refund and reconciliation
 
 Refund totals include pending and succeeded reservations and are checked while locking the payment intent, preventing concurrent over-refunds. Refund idempotency is scoped to a payment intent; the provider receives a stable derived key so retries after a timeout do not create duplicate refunds.
+
+Run `DATABASE_URL=... go run ./cmd/reconcile` as a scheduled one-shot job. It selects stale `PENDING` attempts for the configured provider, looks each up by its stable attempt idempotency key, and transactionally applies recognized provider statuses with an audit record. Rows changed by a webhook or another reconciliation worker are rechecked under lock. The mock provider demonstrates recovery after a lost authorization response; it does not model real settlement or capture.
 
 ## Security considerations
 

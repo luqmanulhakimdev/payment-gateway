@@ -21,3 +21,5 @@ sequenceDiagram
 ```
 
 An authorization is not a capture. A verified provider event will move the intent and attempt to `PAID` in the webhook processing flow.
+
+Stale attempts left at `PENDING` after a provider timeout are checked by the scheduled reconciliation job. It queries the provider using the same stable attempt key, then locks and updates both the attempt and intent with an audit record.
