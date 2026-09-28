@@ -71,6 +71,8 @@ paths:
           description: Content type must be application/json
         '500':
           description: Payment intent could not be created
+        '429': { description: Merchant rate limit exceeded; see Retry-After }
+        '503': { description: Rate limit storage unavailable }
   /v1/payment-intents/{intentID}/refunds:
     post:
       operationId: createRefund
@@ -102,6 +104,8 @@ paths:
         '415': { description: Content-Type must be application/json }
         '502': { description: Refund provider unavailable; retry with the same key }
         '500': { description: Internal refund processing failure }
+        '429': { description: Merchant rate limit exceeded; see Retry-After }
+        '503': { description: Rate limit storage unavailable }
   /v1/payment-intents/{intentID}/attempts:
     post:
       operationId: createPaymentAttempt
@@ -121,6 +125,8 @@ paths:
         '404': { description: Payment intent not found }
         '409': { description: Payment intent cannot accept another attempt }
         '502': { description: Provider unavailable; retry with the same key }
+        '429': { description: Merchant rate limit exceeded; see Retry-After }
+        '503': { description: Rate limit storage unavailable }
   /v1/webhooks/{merchantID}/{provider}:
     post:
       operationId: receivePaymentWebhook
@@ -148,6 +154,8 @@ paths:
         '401': { description: Signature invalid or merchant unavailable }
         '409': { description: Event ID was previously used with different content }
         '500': { description: Event processing failed; provider may retry }
+        '429': { description: Signed merchant webhook rate limit exceeded; see Retry-After }
+        '503': { description: Rate limit storage unavailable }
 components:
   securitySchemes:
     MerchantBearer:

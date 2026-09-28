@@ -32,14 +32,19 @@ type WebhookStore interface {
 	ProcessWebhook(context.Context, int64, string, WebhookEvent, []byte) (bool, error)
 }
 
+type webhookRateLimiter interface {
+	Check(context.Context, int64, string) (bool, time.Duration, error)
+}
+
 type HandleWebhook struct {
 	store         WebhookStore
 	encryptionKey []byte
 	tolerance     time.Duration
+	rateLimiter   webhookRateLimiter
 }
 
-func NewHandleWebhook(store WebhookStore, encryptionKey []byte) *HandleWebhook {
-	return &HandleWebhook{store: store, encryptionKey: append([]byte(nil), encryptionKey...), tolerance: 5 * time.Minute}
+func NewHandleWebhook(store WebhookStore, encryptionKey []byte, limiter webhookRateLimiter) *HandleWebhook {
+	return &HandleWebhook{store: store, encryptionKey: append([]byte(nil), encryptionKey...), tolerance: 5 * time.Minute, rateLimiter: limiter}
 }
 
 func (h *HandleWebhook) Execute(ctx context.Context, merchantID int64, provider, signature string, body []byte, now time.Time) (WebhookResult, error) {
@@ -59,6 +64,15 @@ func (h *HandleWebhook) Execute(ctx context.Context, merchantID int64, provider,
 	}
 	if err := VerifyWebhookSignature(secret, body, signature, now, h.tolerance); err != nil {
 		return WebhookResult{}, err
+	}
+	if h.rateLimiter != nil {
+		allowed, retryAfter, err := h.rateLimiter.Check(ctx, merchantID, "webhooks")
+		if err != nil {
+			return WebhookResult{}, fmt.Errorf("check webhook rate limit: %w", ErrRateLimitStoreUnavailable)
+		}
+		if !allowed {
+			return WebhookResult{}, RateLimitExceededError{RetryAfter: retryAfter}
+		}
 	}
 	decoder := json.NewDecoder(strings.NewReader(string(body)))
 	decoder.DisallowUnknownFields()

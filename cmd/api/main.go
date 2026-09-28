@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -47,9 +48,17 @@ func run() error {
 	if err != nil || len(webhookKey) != 32 {
 		return errors.New("WEBHOOK_ENCRYPTION_KEY must be base64 for exactly 32 random bytes")
 	}
-	handleWebhook := application.NewHandleWebhook(postgres.NewWebhookStore(pool), webhookKey)
+	rateLimit, err := configuredRateLimit()
+	if err != nil {
+		return err
+	}
+	rateLimiter, err := application.NewMerchantRateLimiter(postgres.NewRateLimitStore(pool), rateLimit.requests, rateLimit.window)
+	if err != nil {
+		return err
+	}
+	handleWebhook := application.NewHandleWebhook(postgres.NewWebhookStore(pool), webhookKey, rateLimiter)
 	authenticator := postgres.NewMerchantAuthenticator(pool)
-	server := &http.Server{Addr: addr, Handler: httpapi.NewRouter(pool.Ping, createIntent, authenticator, createRefund, createAttempt, handleWebhook), ReadHeaderTimeout: 5 * time.Second}
+	server := &http.Server{Addr: addr, Handler: httpapi.NewRouter(pool.Ping, createIntent, authenticator, createRefund, createAttempt, handleWebhook, rateLimiter), ReadHeaderTimeout: 5 * time.Second}
 	shutdownCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	go func() {
@@ -66,4 +75,28 @@ func run() error {
 		return err
 	}
 	return nil
+}
+
+type rateLimitConfig struct {
+	requests int
+	window   time.Duration
+}
+
+func configuredRateLimit() (rateLimitConfig, error) {
+	config := rateLimitConfig{requests: 60, window: time.Minute}
+	if value := os.Getenv("RATE_LIMIT_REQUESTS"); value != "" {
+		requests, err := strconv.Atoi(value)
+		if err != nil || requests < 1 || requests > 100000 {
+			return rateLimitConfig{}, errors.New("RATE_LIMIT_REQUESTS must be between 1 and 100000")
+		}
+		config.requests = requests
+	}
+	if value := os.Getenv("RATE_LIMIT_WINDOW"); value != "" {
+		window, err := time.ParseDuration(value)
+		if err != nil || window <= 0 {
+			return rateLimitConfig{}, errors.New("RATE_LIMIT_WINDOW must be a positive Go duration")
+		}
+		config.window = window
+	}
+	return config, nil
 }

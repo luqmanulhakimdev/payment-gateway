@@ -19,7 +19,7 @@ Pragmatic hexagonal architecture separates domain, application ports, infrastruc
 - Merchant-scoped partial/full refund API with idempotency, locked refund reservations, mock provider refunds, and audit records
 - Docker Compose and GitHub Actions CI with PostgreSQL migration integration tests
 
-Rate limiting remains in progress. Payment attempts return `AUTHORIZED`; refunds require a `PAID` intent from a provider event. The mock adapters return deterministic references and do not process real transactions. See [ADR 004](docs/adr/004-idempotent-payment-attempts.md) for retry behavior and [ADR 006](docs/adr/006-payment-reconciliation.md) for reconciliation.
+Payment attempts return `AUTHORIZED`; refunds require a `PAID` intent from a provider event. The mock adapters return deterministic references and do not process real transactions. See [ADR 004](docs/adr/004-idempotent-payment-attempts.md) for retry behavior, [ADR 006](docs/adr/006-payment-reconciliation.md) for reconciliation, and [ADR 007](docs/adr/007-rate-limiting.md) for API rate limits.
 
 ## Tech stack
 
@@ -72,6 +72,8 @@ Compose credentials are for local development only. Do not reuse them outside lo
 | `WEBHOOK_ENCRYPTION_KEY` | Base64 encoded 32 byte key used to encrypt merchant webhook secrets | Local development key in `.env.example` |
 | `RECONCILIATION_OLDER_THAN` | Minimum age for pending attempts selected by reconciliation | `5m` |
 | `RECONCILIATION_BATCH_SIZE` | Maximum attempts per reconciliation run | `100` |
+| `RATE_LIMIT_REQUESTS` | Requests per merchant and endpoint scope in each window | `60` |
+| `RATE_LIMIT_WINDOW` | Fixed rate-limit window as a Go duration | `1m` |
 
 ## Migrations
 
@@ -111,6 +113,8 @@ Run `DATABASE_URL=... go run ./cmd/reconcile` as a scheduled one-shot job. It se
 ## Security considerations
 
 The schema has no card number or CVV columns. Payment methods store provider references and safe display labels only. Merchant API key hashes can be verified without storing raw keys; webhook secrets must be encrypted at rest because signature verification requires the original secret. Keep encryption keys and any provider credentials in deployment secret storage.
+
+Authenticated merchant endpoints use a PostgreSQL fixed-window counter, scoped by merchant and operation. Signed webhooks consume quota only after signature verification. Requests over quota receive `429 Too Many Requests` with `Retry-After`; if PostgreSQL cannot enforce the limit, the API fails closed with `503`.
 
 ## Future improvements
 

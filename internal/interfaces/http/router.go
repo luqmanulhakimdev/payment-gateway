@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"math"
 	"mime"
 	"net/http"
 	"strconv"
@@ -19,7 +20,11 @@ type MerchantAuthenticator interface {
 	Authenticate(context.Context, string) (int64, error)
 }
 
-func NewRouter(checkDatabase func(context.Context) error, createIntent *application.CreateIntent, authenticator MerchantAuthenticator, createRefund *application.CreateRefund, createAttempt *application.CreatePaymentAttempt, handleWebhook *application.HandleWebhook) http.Handler {
+type RequestRateLimiter interface {
+	Check(context.Context, int64, string) (bool, time.Duration, error)
+}
+
+func NewRouter(checkDatabase func(context.Context) error, createIntent *application.CreateIntent, authenticator MerchantAuthenticator, createRefund *application.CreateRefund, createAttempt *application.CreatePaymentAttempt, handleWebhook *application.HandleWebhook, rateLimiter RequestRateLimiter) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
@@ -37,9 +42,9 @@ func NewRouter(checkDatabase func(context.Context) error, createIntent *applicat
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ready\n"))
 	})
-	mux.Handle("POST /v1/payment-intents", createIntentHandler{useCase: createIntent, authenticator: authenticator})
-	mux.Handle("POST /v1/payment-intents/{intentID}/refunds", createRefundHandler{useCase: createRefund, authenticator: authenticator})
-	mux.Handle("POST /v1/payment-intents/{intentID}/attempts", createAttemptHandler{useCase: createAttempt, authenticator: authenticator})
+	mux.Handle("POST /v1/payment-intents", createIntentHandler{useCase: createIntent, authenticator: authenticator, rateLimiter: rateLimiter})
+	mux.Handle("POST /v1/payment-intents/{intentID}/refunds", createRefundHandler{useCase: createRefund, authenticator: authenticator, rateLimiter: rateLimiter})
+	mux.Handle("POST /v1/payment-intents/{intentID}/attempts", createAttemptHandler{useCase: createAttempt, authenticator: authenticator, rateLimiter: rateLimiter})
 	mux.Handle("POST /v1/webhooks/{merchantID}/{provider}", webhookHandler{useCase: handleWebhook})
 	return mux
 }
@@ -73,6 +78,18 @@ func (h webhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "invalid_event", "Webhook event is invalid")
 		case errors.Is(err, application.ErrWebhookConflict):
 			writeError(w, http.StatusConflict, "event_id_conflict", "Webhook event ID was already used with different content")
+		case errors.Is(err, application.ErrRateLimitExceeded):
+			var exceeded application.RateLimitExceededError
+			if errors.As(err, &exceeded) {
+				seconds := int(math.Ceil(exceeded.RetryAfter.Seconds()))
+				if seconds < 1 {
+					seconds = 1
+				}
+				w.Header().Set("Retry-After", strconv.Itoa(seconds))
+			}
+			writeError(w, http.StatusTooManyRequests, "rate_limit_exceeded", "Request rate limit exceeded")
+		case errors.Is(err, application.ErrRateLimitStoreUnavailable):
+			writeError(w, http.StatusServiceUnavailable, "rate_limit_unavailable", "Request could not be rate limited")
 		default:
 			writeError(w, http.StatusInternalServerError, "webhook_processing_failed", "Webhook could not be processed")
 		}
@@ -89,6 +106,7 @@ func (h webhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 type createAttemptHandler struct {
 	useCase       *application.CreatePaymentAttempt
 	authenticator MerchantAuthenticator
+	rateLimiter   RequestRateLimiter
 }
 
 func (h createAttemptHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -98,6 +116,9 @@ func (h createAttemptHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 	}
 	merchantID, ok := (createIntentHandler{authenticator: h.authenticator}).authenticate(w, r)
 	if !ok {
+		return
+	}
+	if !allowRequest(w, r, h.rateLimiter, merchantID, "payment-attempts") {
 		return
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, 1024)
@@ -140,6 +161,7 @@ func (h createAttemptHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 type createRefundHandler struct {
 	useCase       *application.CreateRefund
 	authenticator MerchantAuthenticator
+	rateLimiter   RequestRateLimiter
 }
 
 func (h createRefundHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -149,6 +171,9 @@ func (h createRefundHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	merchantID, ok := (createIntentHandler{authenticator: h.authenticator}).authenticate(w, r)
 	if !ok {
+		return
+	}
+	if !allowRequest(w, r, h.rateLimiter, merchantID, "refunds") {
 		return
 	}
 	if mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type")); err != nil || mediaType != "application/json" {
@@ -207,6 +232,7 @@ func (h createRefundHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 type createIntentHandler struct {
 	useCase       *application.CreateIntent
 	authenticator MerchantAuthenticator
+	rateLimiter   RequestRateLimiter
 }
 
 type errorResponse struct {
@@ -223,6 +249,9 @@ func (h createIntentHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	merchantID, ok := h.authenticate(w, r)
 	if !ok {
+		return
+	}
+	if !allowRequest(w, r, h.rateLimiter, merchantID, "payment-intents") {
 		return
 	}
 	if mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type")); err != nil || mediaType != "application/json" {
@@ -269,6 +298,29 @@ func (h createIntentHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(result.StatusCode)
 	_, _ = w.Write(result.Body)
+}
+
+func allowRequest(w http.ResponseWriter, r *http.Request, limiter RequestRateLimiter, merchantID int64, scope string) bool {
+	if limiter == nil {
+		return true
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), time.Second)
+	defer cancel()
+	allowed, retryAfter, err := limiter.Check(ctx, merchantID, scope)
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, "rate_limit_unavailable", "Request could not be rate limited")
+		return false
+	}
+	if !allowed {
+		seconds := int(math.Ceil(retryAfter.Seconds()))
+		if seconds < 1 {
+			seconds = 1
+		}
+		w.Header().Set("Retry-After", strconv.Itoa(seconds))
+		writeError(w, http.StatusTooManyRequests, "rate_limit_exceeded", "Request rate limit exceeded")
+		return false
+	}
+	return true
 }
 
 func (h createIntentHandler) authenticate(w http.ResponseWriter, r *http.Request) (int64, bool) {
