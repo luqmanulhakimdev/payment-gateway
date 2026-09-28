@@ -119,4 +119,4 @@ Authenticated merchant endpoints use a PostgreSQL fixed-window counter, scoped b
 
 ## Future improvements
 
-Implement merchant authentication, transactional idempotent payment creation, durable webhook retries, refunds, reconciliation jobs, rate limiting, and operational metrics and tracing.
+Add queued webhook delivery with backoff and dead-letter handling, reconciliation for refunds that remain pending after provider timeouts, operational metrics and tracing, and adapters for production payment providers. The current webhook endpoint persists and processes each verified event transactionally in the request; provider retries can safely repeat an event after a failed transaction.
