@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"log"
 	"net/http"
@@ -42,8 +43,13 @@ func run() error {
 	provider := mockprovider.New()
 	createAttempt := application.NewCreatePaymentAttempt(postgres.NewAttemptStore(pool), provider)
 	createRefund := application.NewCreateRefund(postgres.NewRefundStore(pool), provider)
+	webhookKey, err := base64.StdEncoding.DecodeString(os.Getenv("WEBHOOK_ENCRYPTION_KEY"))
+	if err != nil || len(webhookKey) != 32 {
+		return errors.New("WEBHOOK_ENCRYPTION_KEY must be base64 for exactly 32 random bytes")
+	}
+	handleWebhook := application.NewHandleWebhook(postgres.NewWebhookStore(pool), webhookKey)
 	authenticator := postgres.NewMerchantAuthenticator(pool)
-	server := &http.Server{Addr: addr, Handler: httpapi.NewRouter(pool.Ping, createIntent, authenticator, createRefund, createAttempt), ReadHeaderTimeout: 5 * time.Second}
+	server := &http.Server{Addr: addr, Handler: httpapi.NewRouter(pool.Ping, createIntent, authenticator, createRefund, createAttempt, handleWebhook), ReadHeaderTimeout: 5 * time.Second}
 	shutdownCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	go func() {

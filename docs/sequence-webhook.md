@@ -1,25 +1,26 @@
-# Webhook processing sequence (planned)
+# Webhook processing sequence
 
 ```mermaid
 sequenceDiagram
   participant Provider
   participant API as Webhook endpoint
   participant DB as PostgreSQL
-  participant Worker
   Provider->>API: Event + signature
-  API->>API: Verify signature
-  API->>DB: Persist valid event with unique provider event ID
+  API->>DB: Load encrypted merchant secret
+  API->>API: Decrypt secret and verify exact signed body
+  API->>API: Validate allow-listed event fields
+  API->>DB: Begin transaction and insert event with unique provider event ID
   alt Duplicate event
-    DB-->>API: Existing event
+    DB-->>API: Lock existing event
+    alt Already processed with same content
+      API-->>Provider: 200 duplicate acknowledgement
+    else Retryable delivery
+      API->>DB: Retry payment transition
+    end
   else New event
-    DB-->>API: Stored as RECEIVED
+    API->>DB: Update attempt, intent, audit, and event status
+    API->>DB: Commit transaction
   end
-  API-->>Provider: Acknowledge durable receipt
-  Worker->>DB: Claim received or retryable event
-  Worker->>Worker: Apply idempotent payment transition
-  alt Processed
-    Worker->>DB: Mark PROCESSED
-  else Temporary failure
-    Worker->>DB: Store error and next_attempt_at
-  end
+  API-->>Provider: 200 acknowledgement
+  Note over API,DB: Invalid state or DB failure rolls back; provider can retry.
 ```

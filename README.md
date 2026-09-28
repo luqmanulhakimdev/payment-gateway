@@ -14,10 +14,11 @@ Pragmatic hexagonal architecture separates domain, application ports, infrastruc
 - Idempotent payment attempt execution with persisted provider authorization and stable provider retry keys
 - `PaymentProvider` port and deterministic `MockPaymentProvider` adapter, with no card-data fields
 - HMAC-SHA256 webhook signature verifier with constant-time comparison and timestamp tolerance
+- Signed webhook intake with encrypted merchant secrets, persistent event deduplication, and transactional payment state updates
 - Merchant-scoped partial/full refund API with idempotency, locked refund reservations, mock provider refunds, and audit records
 - Docker Compose and GitHub Actions CI with PostgreSQL migration integration tests
 
-Webhook persistence/processing, reconciliation, and rate limiting remain in progress. Payment attempts return `AUTHORIZED`; refunds require a `PAID` intent from a provider event. The mock adapters return deterministic references and do not process real transactions. See [ADR 004](docs/adr/004-idempotent-payment-attempts.md) for retry behavior.
+Reconciliation and rate limiting remain in progress. Payment attempts return `AUTHORIZED`; refunds require a `PAID` intent from a provider event. The mock adapters return deterministic references and do not process real transactions. See [ADR 004](docs/adr/004-idempotent-payment-attempts.md) for retry behavior.
 
 ## Tech stack
 
@@ -67,6 +68,7 @@ Compose credentials are for local development only. Do not reuse them outside lo
 | `HTTP_PORT` | Host API port | `8081` |
 | `POSTGRES_PORT` | Host PostgreSQL port | `5433` |
 | `DATABASE_URL` | Required PostgreSQL connection | Local Compose database |
+| `WEBHOOK_ENCRYPTION_KEY` | Base64 encoded 32 byte key used to encrypt merchant webhook secrets | Local development key in `.env.example` |
 
 ## Migrations
 
@@ -93,7 +95,9 @@ Unit tests run without a database. Set `TEST_DATABASE_URL` to run PostgreSQL mig
 
 ## Idempotency and webhook security
 
-Payment creation request bodies are hashed for same-key/different-request conflict detection. PostgreSQL enforces uniqueness by `(merchant_id, idempotency_key)`. Webhook signatures cover the timestamp and exact raw body; timestamp tolerance limits replay windows, while a database uniqueness constraint will deduplicate provider event IDs during processing.
+Payment creation request bodies are hashed for same-key/different-request conflict detection. PostgreSQL enforces uniqueness by `(merchant_id, idempotency_key)`. Webhook signatures use `Payment-Signature: t=<unix>,v1=<hex>` over the timestamp, a period, and exact raw body; timestamp tolerance is five minutes. `POST /v1/webhooks/{merchantID}/{provider}` accepts only `payment.paid` and `payment.failed` events with `id`, `type`, and `payment_reference`. Extra fields are rejected, and only those allow-listed fields are persisted. The event ID uniqueness constraint deduplicates deliveries; event record, payment status changes, and audit entry commit together. Failed transaction attempts roll back and can be retried by the provider.
+
+Create a merchant once with `MERCHANT_NAME="Demo" DATABASE_URL=... WEBHOOK_ENCRYPTION_KEY=... go run ./cmd/create-merchant`. The command prints the API key and webhook signing secret once; save them securely. Webhook secrets are encrypted with AES-256-GCM at rest. Generate a random 32-byte key for each deployment, encode it with base64, and store it in the deployment's secret manager. The checked-in key is only for local Compose development.
 
 ## Refund and reconciliation
 

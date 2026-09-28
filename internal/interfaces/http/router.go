@@ -7,6 +7,7 @@ import (
 	"io"
 	"mime"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -18,7 +19,7 @@ type MerchantAuthenticator interface {
 	Authenticate(context.Context, string) (int64, error)
 }
 
-func NewRouter(checkDatabase func(context.Context) error, createIntent *application.CreateIntent, authenticator MerchantAuthenticator, createRefund *application.CreateRefund, createAttempt *application.CreatePaymentAttempt) http.Handler {
+func NewRouter(checkDatabase func(context.Context) error, createIntent *application.CreateIntent, authenticator MerchantAuthenticator, createRefund *application.CreateRefund, createAttempt *application.CreatePaymentAttempt, handleWebhook *application.HandleWebhook) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
@@ -39,7 +40,50 @@ func NewRouter(checkDatabase func(context.Context) error, createIntent *applicat
 	mux.Handle("POST /v1/payment-intents", createIntentHandler{useCase: createIntent, authenticator: authenticator})
 	mux.Handle("POST /v1/payment-intents/{intentID}/refunds", createRefundHandler{useCase: createRefund, authenticator: authenticator})
 	mux.Handle("POST /v1/payment-intents/{intentID}/attempts", createAttemptHandler{useCase: createAttempt, authenticator: authenticator})
+	mux.Handle("POST /v1/webhooks/{merchantID}/{provider}", webhookHandler{useCase: handleWebhook})
 	return mux
+}
+
+type webhookHandler struct{ useCase *application.HandleWebhook }
+
+func (h webhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if h.useCase == nil {
+		writeError(w, http.StatusServiceUnavailable, "service_unavailable", "webhook service is not configured")
+		return
+	}
+	merchantID, err := strconv.ParseInt(r.PathValue("merchantID"), 10, 64)
+	if err != nil || merchantID <= 0 {
+		writeError(w, http.StatusNotFound, "not_found", "Webhook endpoint does not exist")
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", "Webhook body is invalid")
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+	result, err := h.useCase.Execute(ctx, merchantID, r.PathValue("provider"), r.Header.Get("Payment-Signature"), body, time.Now())
+	if err != nil {
+		switch {
+		case errors.Is(err, application.ErrInvalidWebhookSignature):
+			writeError(w, http.StatusUnauthorized, "invalid_signature", "Webhook signature is invalid")
+		case errors.Is(err, application.ErrWebhookEventInvalid):
+			writeError(w, http.StatusBadRequest, "invalid_event", "Webhook event is invalid")
+		case errors.Is(err, application.ErrWebhookConflict):
+			writeError(w, http.StatusConflict, "event_id_conflict", "Webhook event ID was already used with different content")
+		default:
+			writeError(w, http.StatusInternalServerError, "webhook_processing_failed", "Webhook could not be processed")
+		}
+		return
+	}
+	if result.Duplicate {
+		w.Header().Set("Idempotent-Replay", "true")
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(result)
 }
 
 type createAttemptHandler struct {

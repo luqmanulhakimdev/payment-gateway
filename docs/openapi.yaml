@@ -121,6 +121,33 @@ paths:
         '404': { description: Payment intent not found }
         '409': { description: Payment intent cannot accept another attempt }
         '502': { description: Provider unavailable; retry with the same key }
+  /v1/webhooks/{merchantID}/{provider}:
+    post:
+      operationId: receivePaymentWebhook
+      summary: Receive a signed payment provider event
+      description: Verifies Payment-Signature over the timestamp and exact request bytes. Supports payment.paid and payment.failed with only id, type, and payment_reference fields. Duplicate processed event IDs are acknowledged without repeating payment updates.
+      parameters:
+        - { name: merchantID, in: path, required: true, schema: { type: integer, format: int64, minimum: 1 } }
+        - { name: provider, in: path, required: true, schema: { type: string, minLength: 1, maxLength: 50 } }
+        - { name: Payment-Signature, in: header, required: true, schema: { type: string, example: 't=1800000000,v1=hex_hmac_sha256' } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [id, type, payment_reference]
+              properties:
+                id: { type: string, maxLength: 200 }
+                type: { type: string, enum: [payment.paid, payment.failed] }
+                payment_reference: { type: string, maxLength: 200 }
+      responses:
+        '200': { description: Event processed or already processed; duplicate responses include Idempotent-Replay true }
+        '400': { description: Invalid signed event payload }
+        '401': { description: Signature invalid or merchant unavailable }
+        '409': { description: Event ID was previously used with different content }
+        '500': { description: Event processing failed; provider may retry }
 components:
   securitySchemes:
     MerchantBearer:
