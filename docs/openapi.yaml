@@ -102,6 +102,25 @@ paths:
         '415': { description: Content-Type must be application/json }
         '502': { description: Refund provider unavailable; retry with the same key }
         '500': { description: Internal refund processing failure }
+  /v1/payment-intents/{intentID}/attempts:
+    post:
+      operationId: createPaymentAttempt
+      summary: Start an idempotent provider payment attempt
+      description: The mock provider authorizes the attempt without accepting card data. Payment completion is asynchronous and is set through a verified provider webhook.
+      security: [{ MerchantBearer: [] }]
+      parameters:
+        - { name: intentID, in: path, required: true, schema: { type: string, minLength: 1 } }
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema: { type: string, minLength: 1, maxLength: 255 }
+      responses:
+        '201': { description: Attempt authorized or replayed }
+        '400': { description: Invalid or missing idempotency key }
+        '401': { description: Merchant API key is invalid }
+        '404': { description: Payment intent not found }
+        '409': { description: Payment intent cannot accept another attempt }
+        '502': { description: Provider unavailable; retry with the same key }
 components:
   securitySchemes:
     MerchantBearer:

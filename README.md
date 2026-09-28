@@ -11,12 +11,13 @@ Pragmatic hexagonal architecture separates domain, application ports, infrastruc
 - Go HTTP service with process health and database readiness endpoints
 - PostgreSQL schema migrations applied transactionally at startup
 - Merchant API key generation and authentication; idempotent payment-intent creation; payment lifecycle transition rules and refund amount checks
+- Idempotent payment attempt execution with persisted provider authorization and stable provider retry keys
 - `PaymentProvider` port and deterministic `MockPaymentProvider` adapter, with no card-data fields
 - HMAC-SHA256 webhook signature verifier with constant-time comparison and timestamp tolerance
 - Merchant-scoped partial/full refund API with idempotency, locked refund reservations, mock provider refunds, and audit records
 - Docker Compose and GitHub Actions CI with PostgreSQL migration integration tests
 
-Payment attempt execution, webhook persistence/processing, reconciliation, and rate limiting remain in progress. Refunds require a paid intent and a captured provider attempt; the current mock refund adapter returns deterministic references and does not process real transactions.
+Webhook persistence/processing, reconciliation, and rate limiting remain in progress. Payment attempts return `AUTHORIZED`; refunds require a `PAID` intent from a provider event. The mock adapters return deterministic references and do not process real transactions. See [ADR 004](docs/adr/004-idempotent-payment-attempts.md) for retry behavior.
 
 ## Tech stack
 

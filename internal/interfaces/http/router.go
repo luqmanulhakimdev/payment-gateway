@@ -18,7 +18,7 @@ type MerchantAuthenticator interface {
 	Authenticate(context.Context, string) (int64, error)
 }
 
-func NewRouter(checkDatabase func(context.Context) error, createIntent *application.CreateIntent, authenticator MerchantAuthenticator, createRefund *application.CreateRefund) http.Handler {
+func NewRouter(checkDatabase func(context.Context) error, createIntent *application.CreateIntent, authenticator MerchantAuthenticator, createRefund *application.CreateRefund, createAttempt *application.CreatePaymentAttempt) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
@@ -38,7 +38,59 @@ func NewRouter(checkDatabase func(context.Context) error, createIntent *applicat
 	})
 	mux.Handle("POST /v1/payment-intents", createIntentHandler{useCase: createIntent, authenticator: authenticator})
 	mux.Handle("POST /v1/payment-intents/{intentID}/refunds", createRefundHandler{useCase: createRefund, authenticator: authenticator})
+	mux.Handle("POST /v1/payment-intents/{intentID}/attempts", createAttemptHandler{useCase: createAttempt, authenticator: authenticator})
 	return mux
+}
+
+type createAttemptHandler struct {
+	useCase       *application.CreatePaymentAttempt
+	authenticator MerchantAuthenticator
+}
+
+func (h createAttemptHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if h.useCase == nil || h.authenticator == nil {
+		writeError(w, http.StatusServiceUnavailable, "service_unavailable", "payment attempt service is not configured")
+		return
+	}
+	merchantID, ok := (createIntentHandler{authenticator: h.authenticator}).authenticate(w, r)
+	if !ok {
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 1024)
+	body, err := io.ReadAll(r.Body)
+	if err != nil || len(body) != 0 {
+		writeError(w, http.StatusBadRequest, "invalid_request", "Payment attempt requests must not include a body")
+		return
+	}
+	key := r.Header.Get("Idempotency-Key")
+	if key == "" {
+		writeError(w, http.StatusBadRequest, "idempotency_key_required", "Idempotency-Key header is required")
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+	attempt, replayed, err := h.useCase.Execute(ctx, merchantID, r.PathValue("intentID"), key)
+	if err != nil {
+		switch {
+		case errors.Is(err, domain.ErrInvalidIdempotencyKey), errors.Is(err, domain.ErrInvalidPayment):
+			writeError(w, http.StatusBadRequest, "invalid_request", "Payment attempt request is invalid")
+		case errors.Is(err, application.ErrIntentNotFound):
+			writeError(w, http.StatusNotFound, "payment_intent_not_found", "Payment intent does not exist")
+		case errors.Is(err, application.ErrIntentNotPayable):
+			writeError(w, http.StatusConflict, "payment_intent_not_payable", "Payment intent cannot accept another attempt")
+		case errors.Is(err, application.ErrAttemptProviderUnavailable):
+			writeError(w, http.StatusBadGateway, "provider_unavailable", "Payment provider could not complete the request")
+		default:
+			writeError(w, http.StatusInternalServerError, "internal_error", "Payment attempt could not be created")
+		}
+		return
+	}
+	if replayed {
+		w.Header().Set("Idempotent-Replay", "true")
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	_ = json.NewEncoder(w).Encode(attempt)
 }
 
 type createRefundHandler struct {

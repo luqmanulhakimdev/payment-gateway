@@ -9,8 +9,10 @@ var ErrInvalidProviderRequest = errors.New("invalid payment provider request")
 
 type ProviderRequest struct {
 	PaymentIntentID string
+	AttemptID       int64
 	AmountMinor     int64
 	Currency        string
+	IdempotencyKey  string
 }
 
 type ProviderStatus string
@@ -25,6 +27,7 @@ type ProviderResult struct {
 // PaymentProvider is the outbound port used to start a provider-side payment.
 // It deliberately has no field for card numbers, CVV, or raw credentials.
 type PaymentProvider interface {
+	Name() string
 	CreatePayment(context.Context, ProviderRequest) (ProviderResult, error)
 }
 

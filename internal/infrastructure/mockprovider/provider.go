@@ -15,12 +15,14 @@ type Provider struct{}
 
 func New() *Provider { return &Provider{} }
 
+func (*Provider) Name() string { return "mock" }
+
 func (*Provider) CreatePayment(_ context.Context, request application.ProviderRequest) (application.ProviderResult, error) {
-	if strings.TrimSpace(request.PaymentIntentID) == "" || request.AmountMinor <= 0 || !validCurrency(request.Currency) {
+	if strings.TrimSpace(request.PaymentIntentID) == "" || request.AttemptID <= 0 || request.IdempotencyKey == "" || request.AmountMinor <= 0 || !validCurrency(request.Currency) {
 		return application.ProviderResult{}, application.ErrInvalidProviderRequest
 	}
 	return application.ProviderResult{
-		Reference: fmt.Sprintf("mock_%s", request.PaymentIntentID),
+		Reference: fmt.Sprintf("mock_%s_%d", request.PaymentIntentID, request.AttemptID),
 		Status:    application.ProviderAuthorized,
 	}, nil
 }

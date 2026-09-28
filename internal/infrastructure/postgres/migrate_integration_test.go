@@ -42,4 +42,11 @@ func TestMigrationsIntegration(t *testing.T) {
 	if !refundIdempotencyIndex {
 		t.Fatal("refund idempotency index was not applied")
 	}
+	var attemptIdempotencyIndex bool
+	if err := pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname='public' AND indexname='payment_attempts_intent_idempotency_unique_idx')`).Scan(&attemptIdempotencyIndex); err != nil {
+		t.Fatal(err)
+	}
+	if !attemptIdempotencyIndex {
+		t.Fatal("payment attempt idempotency index was not applied")
+	}
 }

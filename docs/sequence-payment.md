@@ -1,23 +1,23 @@
-# Payment creation sequence (planned)
+# Payment intent and attempt sequence
 
 ```mermaid
 sequenceDiagram
   actor Merchant
   participant API
-  participant UseCase as Create payment use case
+  participant UseCase as Payment application
   participant DB as PostgreSQL
   participant Provider as MockPaymentProvider
-  Merchant->>API: Create intent + Idempotency-Key
-  API->>UseCase: Authenticated request
-  UseCase->>DB: Claim key scoped to merchant and compare request hash
-  alt Existing key with same request
-    DB-->>UseCase: Stored response
-  else New key
-    UseCase->>DB: Persist intent and idempotency record
-    UseCase->>Provider: Create provider attempt
-    Provider-->>UseCase: Provider reference and outcome
-    UseCase->>DB: Persist attempt and lifecycle state
-  end
-  UseCase-->>API: Stable response
-  API-->>Merchant: Payment intent
+  Merchant->>API: POST payment intent + Idempotency-Key
+  API->>UseCase: Authenticate and validate request
+  UseCase->>DB: Atomically persist intent and replay response
+  DB-->>API: Stable payment intent response
+  Merchant->>API: POST attempt + Idempotency-Key
+  API->>UseCase: Authenticated attempt request
+  UseCase->>DB: Lock intent and reserve PENDING attempt
+  UseCase->>Provider: CreatePayment with stable attempt key
+  Provider-->>UseCase: AUTHORIZED + provider reference
+  UseCase->>DB: Persist authorization and audit record
+  API-->>Merchant: Authorized attempt
 ```
+
+An authorization is not a capture. A verified provider event will move the intent and attempt to `PAID` in the webhook processing flow.
