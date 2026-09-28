@@ -1,7 +1,9 @@
 # Database design
 
-PostgreSQL is the system of record. Planned core tables: `merchants, customers, payment_intents, payment_attempts, payment_methods, webhook_events, refunds, idempotency_keys, audit_logs`.
+PostgreSQL is the system of record. The initial migration creates merchants, customers, payment intents, payment methods, payment attempts, webhook events, refunds, idempotency keys, and audit logs. See `migrations/000001_initial_schema.up.sql` for exact columns, constraints, and indexes.
 
-Schema work will add foreign keys, check constraints, uniqueness rules, and indexes alongside the migrations that introduce each feature. Money values use integer minor units plus an explicit currency. Timestamped records use UTC.
+Amounts use integer minor units with an explicit currency code. Payment lifecycle and webhook-processing states are constrained. Idempotency keys are unique within a merchant and retain a request hash and response. Webhook delivery is unique by merchant, provider, and event ID; failed events can be selected through a partial retry index. Foreign keys preserve financial history.
 
-Critical invariants: stock changes are append-only movements; checkout is transactional and locks inventory; order item prices are snapshots; idempotency uniqueness is merchant-scoped; webhook event identifiers are deduplicated.
+The schema stores only provider references and safe display metadata for payment methods. It has no columns for card numbers or CVV. Merchant API keys are represented as hashes. Webhook verification secrets must be stored encrypted at rest because signature verification needs the original secret; decryption keys belong in deployment secret storage. Timestamps are `TIMESTAMPTZ`; JSONB is reserved for metadata, webhook payloads, and audit details.
+
+Apply locally using `docker compose exec -T postgres psql -U app -d payment_gateway < migrations/000001_initial_schema.up.sql`. See [ERD](erd.md).

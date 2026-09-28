@@ -1,0 +1,20 @@
+openapi: 3.1.0
+info:
+  title: Payment Gateway API
+  version: 0.1.0
+  description: Initial service contract. Business endpoints will be added with their implementation.
+servers:
+  - url: http://localhost:8081
+paths:
+  /healthz:
+    get:
+      operationId: healthCheck
+      summary: Check process health
+      responses:
+        '200':
+          description: The HTTP process is running
+          content:
+            text/plain:
+              schema:
+                type: string
+              example: ok

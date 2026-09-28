@@ -46,7 +46,7 @@ The Compose database credentials are for local development only. Do not reuse th
 
 ## Migrations
 
-Ordered up/down SQL migrations will live in `migrations/`. Schema and migration runner are introduced with the first persistence feature. See [database design](docs/database.md).
+Ordered up/down SQL migrations live in `migrations/`. Apply the initial schema using the command in [migration instructions](migrations/README.md). See [database design](docs/database.md).
 
 ## API example
 
@@ -54,7 +54,7 @@ Ordered up/down SQL migrations will live in `migrations/`. Schema and migration 
 curl -i http://localhost:8081/healthz
 ```
 
-Planned routes are documented in [docs/api.md](docs/api.md).
+Planned routes are documented in [docs/api.md](docs/api.md); the baseline OpenAPI contract is [docs/openapi.yaml](docs/openapi.yaml).
 
 ## Testing
 
