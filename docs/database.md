@@ -1,6 +1,6 @@
 # Database design
 
-PostgreSQL is the system of record. The initial migration creates merchants, customers, payment intents, payment methods, payment attempts, webhook events, refunds, idempotency keys, and audit logs. See `migrations/000001_initial_schema.up.sql` for exact columns, constraints, and indexes.
+PostgreSQL is the system of record. The initial migration creates merchants, customers, payment intents, payment methods, payment attempts, webhook events, refunds, idempotency keys, and audit logs. Migration 000002 adds refund idempotency request hashes and the `(payment_intent_id, idempotency_key)` uniqueness constraint.
 
 Amounts use integer minor units with an explicit currency code. Payment lifecycle and webhook-processing states are constrained. Idempotency keys are unique within a merchant and retain a request hash and response. Webhook delivery is unique by merchant, provider, and event ID; failed events can be selected through a partial retry index. Foreign keys preserve financial history.
 

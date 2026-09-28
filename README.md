@@ -13,9 +13,10 @@ Pragmatic hexagonal architecture separates domain, application ports, infrastruc
 - Merchant API key generation and authentication; idempotent payment-intent creation; payment lifecycle transition rules and refund amount checks
 - `PaymentProvider` port and deterministic `MockPaymentProvider` adapter, with no card-data fields
 - HMAC-SHA256 webhook signature verifier with constant-time comparison and timestamp tolerance
+- Merchant-scoped partial/full refund API with idempotency, locked refund reservations, mock provider refunds, and audit records
 - Docker Compose and GitHub Actions CI with PostgreSQL migration integration tests
 
-Payment attempt, webhook persistence/processing, refund, and reconciliation workflows are still in progress.
+Payment attempt execution, webhook persistence/processing, reconciliation, and rate limiting remain in progress. Refunds require a paid intent and a captured provider attempt; the current mock refund adapter returns deterministic references and does not process real transactions.
 
 ## Tech stack
 
@@ -43,6 +44,7 @@ stateDiagram-v2
 ## ERD
 
 See [docs/erd.md](docs/erd.md) for the Mermaid entity relationship diagram.
+Refund persistence and retry behavior are shown in [docs/sequence-refund.md](docs/sequence-refund.md) and [ADR 003](docs/adr/003-refund-reservations.md).
 
 ## Local setup
 
@@ -94,7 +96,7 @@ Payment creation request bodies are hashed for same-key/different-request confli
 
 ## Refund and reconciliation
 
-Refund totals are checked against the captured amount by domain rules. The payment attempt provider call, refund persistence, and reconciliation jobs are planned implementation steps.
+Refund totals include pending and succeeded reservations and are checked while locking the payment intent, preventing concurrent over-refunds. Refund idempotency is scoped to a payment intent; the provider receives a stable derived key so retries after a timeout do not create duplicate refunds.
 
 ## Security considerations
 

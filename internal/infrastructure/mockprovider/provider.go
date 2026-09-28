@@ -2,6 +2,8 @@ package mockprovider
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"strings"
 
@@ -22,6 +24,16 @@ func (*Provider) CreatePayment(_ context.Context, request application.ProviderRe
 		Status:    application.ProviderAuthorized,
 	}, nil
 }
+
+func (*Provider) Refund(_ context.Context, request application.RefundProviderRequest) (application.RefundProviderResult, error) {
+	if strings.TrimSpace(request.PaymentIntentID) == "" || strings.TrimSpace(request.ProviderReference) == "" || request.AmountMinor <= 0 || !validCurrency(request.Currency) || request.IdempotencyKey == "" {
+		return application.RefundProviderResult{}, application.ErrInvalidProviderRequest
+	}
+	digest := sha256.Sum256([]byte(request.IdempotencyKey))
+	return application.RefundProviderResult{Reference: "mock_rf_" + hex.EncodeToString(digest[:12])}, nil
+}
+
+var _ application.RefundProvider = (*Provider)(nil)
 
 func validCurrency(currency string) bool {
 	if len(currency) != 3 {

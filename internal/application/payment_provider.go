@@ -27,3 +27,17 @@ type ProviderResult struct {
 type PaymentProvider interface {
 	CreatePayment(context.Context, ProviderRequest) (ProviderResult, error)
 }
+
+type RefundProviderRequest struct {
+	PaymentIntentID   string
+	ProviderReference string
+	AmountMinor       int64
+	Currency          string
+	IdempotencyKey    string
+}
+
+type RefundProviderResult struct{ Reference string }
+
+type RefundProvider interface {
+	Refund(context.Context, RefundProviderRequest) (RefundProviderResult, error)
+}

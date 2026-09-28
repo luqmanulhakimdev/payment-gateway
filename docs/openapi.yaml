@@ -71,6 +71,37 @@ paths:
           description: Content type must be application/json
         '500':
           description: Payment intent could not be created
+  /v1/payment-intents/{intentID}/refunds:
+    post:
+      operationId: createRefund
+      summary: Refund part or all of a paid payment intent
+      description: Reserves the requested amount, calls the configured provider with a stable idempotency key, and records the result. Same key and body replays the original refund.
+      security:
+        - MerchantBearer: []
+      parameters:
+        - name: intentID
+          in: path
+          required: true
+          schema: { type: string, minLength: 1 }
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema: { type: string, minLength: 1, maxLength: 255 }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateRefundRequest'
+      responses:
+        '201': { description: Refund created or replayed }
+        '400': { description: Invalid request or missing idempotency key }
+        '401': { description: Merchant API key is invalid }
+        '404': { description: Paid payment not found }
+        '409': { description: Payment is not refundable, amount exceeds remaining captured value, or key conflicts }
+        '415': { description: Content-Type must be application/json }
+        '502': { description: Refund provider unavailable; retry with the same key }
+        '500': { description: Internal refund processing failure }
 components:
   securitySchemes:
     MerchantBearer:
@@ -121,3 +152,10 @@ components:
         created_at:
           type: string
           format: date-time
+    CreateRefundRequest:
+      type: object
+      additionalProperties: false
+      required: [amount_minor]
+      properties:
+        amount_minor: { type: integer, format: int64, minimum: 1 }
+        reason: { type: string, maxLength: 500 }

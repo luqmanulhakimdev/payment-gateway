@@ -18,7 +18,7 @@ type MerchantAuthenticator interface {
 	Authenticate(context.Context, string) (int64, error)
 }
 
-func NewRouter(checkDatabase func(context.Context) error, createIntent *application.CreateIntent, authenticator MerchantAuthenticator) http.Handler {
+func NewRouter(checkDatabase func(context.Context) error, createIntent *application.CreateIntent, authenticator MerchantAuthenticator, createRefund *application.CreateRefund) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
@@ -37,7 +37,75 @@ func NewRouter(checkDatabase func(context.Context) error, createIntent *applicat
 		_, _ = w.Write([]byte("ready\n"))
 	})
 	mux.Handle("POST /v1/payment-intents", createIntentHandler{useCase: createIntent, authenticator: authenticator})
+	mux.Handle("POST /v1/payment-intents/{intentID}/refunds", createRefundHandler{useCase: createRefund, authenticator: authenticator})
 	return mux
+}
+
+type createRefundHandler struct {
+	useCase       *application.CreateRefund
+	authenticator MerchantAuthenticator
+}
+
+func (h createRefundHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if h.useCase == nil || h.authenticator == nil {
+		writeError(w, http.StatusServiceUnavailable, "service_unavailable", "refund service is not configured")
+		return
+	}
+	merchantID, ok := (createIntentHandler{authenticator: h.authenticator}).authenticate(w, r)
+	if !ok {
+		return
+	}
+	if mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type")); err != nil || mediaType != "application/json" {
+		writeError(w, http.StatusUnsupportedMediaType, "unsupported_media_type", "Content-Type must be application/json")
+		return
+	}
+	key := r.Header.Get("Idempotency-Key")
+	if key == "" {
+		writeError(w, http.StatusBadRequest, "idempotency_key_required", "Idempotency-Key header is required")
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 16<<10)
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	var request application.RefundRequest
+	if err := decoder.Decode(&request); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", "Request body is invalid")
+		return
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		writeError(w, http.StatusBadRequest, "invalid_request", "Request body must contain one JSON object")
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+	refund, replayed, err := h.useCase.Execute(ctx, merchantID, r.PathValue("intentID"), key, request)
+	if err != nil {
+		switch {
+		case errors.Is(err, domain.ErrInvalidPayment), errors.Is(err, domain.ErrInvalidIdempotencyKey):
+			writeError(w, http.StatusBadRequest, "invalid_request", "Refund request is invalid")
+		case errors.Is(err, domain.ErrRefundExceedsAmount):
+			writeError(w, http.StatusConflict, "refund_exceeds_captured_amount", "Refund amount exceeds the remaining captured amount")
+		case errors.Is(err, application.ErrRefundNotFound):
+			writeError(w, http.StatusNotFound, "payment_not_found", "A refundable payment was not found")
+		case errors.Is(err, application.ErrRefundConflict):
+			writeError(w, http.StatusConflict, "idempotency_conflict", "Idempotency-Key was used for a different refund request")
+		case errors.Is(err, application.ErrRefundInProgress):
+			writeError(w, http.StatusConflict, "refund_in_progress", "Refund is being processed")
+		case errors.Is(err, domain.ErrInvalidTransition):
+			writeError(w, http.StatusConflict, "payment_not_refundable", "Only paid payment intents can be refunded")
+		case errors.Is(err, application.ErrRefundProviderUnavailable):
+			writeError(w, http.StatusBadGateway, "refund_provider_unavailable", "Refund provider could not complete the request")
+		default:
+			writeError(w, http.StatusInternalServerError, "internal_error", "Refund could not be completed")
+		}
+		return
+	}
+	if replayed {
+		w.Header().Set("Idempotent-Replay", "true")
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	_ = json.NewEncoder(w).Encode(refund)
 }
 
 type createIntentHandler struct {

@@ -35,4 +35,11 @@ func TestMigrationsIntegration(t *testing.T) {
 	if tableCount != 9 {
 		t.Fatalf("core table count = %d, want 9", tableCount)
 	}
+	var refundIdempotencyIndex bool
+	if err := pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname='public' AND indexname='refunds_intent_idempotency_unique_idx')`).Scan(&refundIdempotencyIndex); err != nil {
+		t.Fatal(err)
+	}
+	if !refundIdempotencyIndex {
+		t.Fatal("refund idempotency index was not applied")
+	}
 }

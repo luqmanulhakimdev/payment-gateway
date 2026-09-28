@@ -28,3 +28,19 @@ func TestCreatePaymentRejectsInvalidRequest(t *testing.T) {
 		t.Fatalf("error = %v, want %v", err, application.ErrInvalidProviderRequest)
 	}
 }
+
+func TestRefundReturnsDeterministicReference(t *testing.T) {
+	provider := New()
+	request := application.RefundProviderRequest{PaymentIntentID: "pi_123", ProviderReference: "mock_pi_123", AmountMinor: 100, Currency: "IDR", IdempotencyKey: "refund-rf_123"}
+	first, err := provider.Refund(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := provider.Refund(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Reference == "" || first != second {
+		t.Fatalf("first=%#v second=%#v", first, second)
+	}
+}
