@@ -16,6 +16,8 @@ Create a local merchant with `MERCHANT_NAME="Demo" DATABASE_URL=... WEBHOOK_ENCR
 
 Reconciliation is a scheduled CLI job rather than a merchant HTTP endpoint: `DATABASE_URL=... RECONCILIATION_OLDER_THAN=5m RECONCILIATION_BATCH_SIZE=100 go run ./cmd/reconcile`. Its JSON report includes checked, updated, unchanged, and failed counts. A nonzero exit signals that a run had provider or persistence failures and should be retried/alerted.
 
+Pending refunds are retried by `DATABASE_URL=... REFUND_RECONCILIATION_OLDER_THAN=5m REFUND_RECONCILIATION_BATCH_SIZE=100 go run ./cmd/reconcile-refunds`. It reuses the stable refund idempotency key, reports checked/recovered/failed counts, and exits nonzero on failures.
+
 ```sh
 curl -X POST http://localhost:8081/v1/payment-intents \
   -H 'Authorization: Bearer YOUR_MERCHANT_API_KEY' \

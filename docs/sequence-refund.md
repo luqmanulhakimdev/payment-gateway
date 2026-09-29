@@ -17,3 +17,5 @@ sequenceDiagram
 ```
 
 The payment intent row lock serializes refund reservations. Pending reservations count against the remaining captured amount, so a provider timeout followed by a retry cannot allow a second request to reserve the same funds.
+
+Stale reservations can be recovered with the scheduled `cmd/reconcile-refunds` worker. It repeats the provider request with the same derived refund key and finalizes the already reserved row after a successful provider response.

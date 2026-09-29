@@ -74,6 +74,8 @@ Compose credentials are for local development only. Do not reuse them outside lo
 | `WEBHOOK_ENCRYPTION_KEY` | Base64 encoded 32 byte key used to encrypt merchant webhook secrets | Local development key in `.env.example` |
 | `RECONCILIATION_OLDER_THAN` | Minimum age for pending attempts selected by reconciliation | `5m` |
 | `RECONCILIATION_BATCH_SIZE` | Maximum attempts per reconciliation run | `100` |
+| `REFUND_RECONCILIATION_OLDER_THAN` | Minimum age of pending refunds selected for recovery | `5m` |
+| `REFUND_RECONCILIATION_BATCH_SIZE` | Maximum refunds per recovery run | `100` |
 | `WEBHOOK_RETRY_BATCH_SIZE` | Maximum due webhook events per retry run | `100` |
 | `RATE_LIMIT_REQUESTS` | Requests per merchant and endpoint scope in each window | `60` |
 | `RATE_LIMIT_WINDOW` | Fixed rate-limit window as a Go duration | `1m` |
@@ -113,6 +115,8 @@ Refund totals include pending and succeeded reservations and are checked while l
 
 Run `DATABASE_URL=... go run ./cmd/reconcile` as a scheduled one-shot job. It selects stale `PENDING` attempts for the configured provider, looks each up by its stable attempt idempotency key, and transactionally applies recognized provider statuses with an audit record. Rows changed by a webhook or another reconciliation worker are rechecked under lock. The mock provider demonstrates recovery after a lost authorization response; it does not model real settlement or capture.
 
+Run `DATABASE_URL=... REFUND_RECONCILIATION_OLDER_THAN=5m REFUND_RECONCILIATION_BATCH_SIZE=100 go run ./cmd/reconcile-refunds` as a scheduled job to retry stale pending refunds. It uses the same stable provider idempotency key as the original request, then finalizes the refund and audit record transactionally. Provider or persistence failures remain pending and cause a nonzero exit for scheduler retry/alerting.
+
 ## Security considerations
 
 The schema has no card number or CVV columns. Payment methods store provider references and safe display labels only. Merchant API key hashes can be verified without storing raw keys; webhook secrets must be encrypted at rest because signature verification requires the original secret. Keep encryption keys and any provider credentials in deployment secret storage.
@@ -121,4 +125,4 @@ Authenticated merchant endpoints use a PostgreSQL fixed-window counter, scoped b
 
 ## Future improvements
 
-Add dead-letter policy and monitoring for repeatedly failing webhook events, reconciliation for refunds that remain pending after provider timeouts, operational metrics and tracing, and adapters for production payment providers. The webhook endpoint persists each verified event before processing; a scheduled worker retries persisted failures with capped exponential backoff, and provider retries can safely repeat events.
+Add dead-letter policy and monitoring for repeatedly failing webhook events, operational metrics and tracing, and adapters for production payment providers. The webhook endpoint persists each verified event before processing; a scheduled worker retries persisted failures with capped exponential backoff, and provider retries can safely repeat events.

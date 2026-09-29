@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -14,6 +15,36 @@ import (
 type RefundStore struct{ pool *pgxpool.Pool }
 
 func NewRefundStore(pool *pgxpool.Pool) *RefundStore { return &RefundStore{pool: pool} }
+
+func (s *RefundStore) ListPendingRefunds(ctx context.Context, before time.Time, limit int) ([]application.PendingRefund, error) {
+	rows, err := s.pool.Query(ctx, `SELECT m.id,pi.public_id,r.public_id,pa.provider_reference,r.amount_minor,r.currency
+		FROM refunds r JOIN payment_intents pi ON pi.id=r.payment_intent_id
+		JOIN merchants m ON m.id=pi.merchant_id JOIN payment_attempts pa ON pa.id=r.payment_attempt_id
+		WHERE r.status='PENDING' AND r.created_at <= $1 ORDER BY r.created_at,r.id LIMIT $2`, before, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list pending refunds: %w", err)
+	}
+	defer rows.Close()
+	items := make([]application.PendingRefund, 0)
+	for rows.Next() {
+		var item application.PendingRefund
+		if err := rows.Scan(&item.MerchantID, &item.IntentID, &item.RefundID, &item.ProviderReference, &item.AmountMinor, &item.Currency); err != nil {
+			return nil, fmt.Errorf("scan pending refund: %w", err)
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read pending refunds: %w", err)
+	}
+	return items, nil
+}
+
+func (s *RefundStore) CompletePendingRefund(ctx context.Context, item application.PendingRefund, providerReference string) error {
+	return s.WithinRefundTransaction(ctx, func(tx application.RefundTransaction) error {
+		_, err := tx.FinalizeRefund(ctx, item.MerchantID, item.IntentID, item.RefundID, providerReference)
+		return err
+	})
+}
 
 func (s *RefundStore) WithinRefundTransaction(ctx context.Context, operation func(application.RefundTransaction) error) error {
 	tx, err := s.pool.Begin(ctx)
