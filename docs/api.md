@@ -10,6 +10,7 @@ Base URL: `http://localhost:8081`.
 - `POST /v1/payment-intents/{intentID}/refunds` requires the merchant bearer API key and an `Idempotency-Key`. Only paid intents with a captured provider attempt can be refunded; partial refunds are supported and concurrent reservations cannot exceed the captured amount.
 - `POST /v1/webhooks/{merchantID}/{provider}` receives the `payment.paid` and `payment.failed` events. It requires `Payment-Signature: t=<unix>,v1=<hex>` signed over `<timestamp>.<exact raw body>`. The event body permits only `id`, `type`, and `payment_reference`; successful duplicate deliveries receive `200` with `Idempotent-Replay: true`.
 - Merchant endpoints and signature-verified webhooks are limited per merchant and endpoint scope. Excess requests return `429 Too Many Requests` with `Retry-After`; the default is 60 requests per minute and can be changed with `RATE_LIMIT_REQUESTS` and `RATE_LIMIT_WINDOW`.
+- Verified events are committed before payment processing. Failed transitions retain `FAILED`, `last_error`, attempts, and a capped exponential `next_attempt_at`; the endpoint still returns an error so providers may retry immediately. Run the bounded worker periodically with `DATABASE_URL=... WEBHOOK_RETRY_BATCH_SIZE=100 go run ./cmd/retry-webhooks`.
 
 Create a local merchant with `MERCHANT_NAME="Demo" DATABASE_URL=... WEBHOOK_ENCRYPTION_KEY=... go run ./cmd/create-merchant`. Save the printed API key and webhook signing secret securely; the command prints them only once.
 

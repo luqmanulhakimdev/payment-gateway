@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -49,15 +50,47 @@ func (s *WebhookStore) ProcessWebhook(ctx context.Context, merchantID int64, pro
 		if status == "PROCESSED" {
 			return true, tx.Commit(ctx)
 		}
-		if _, err := tx.Exec(ctx, `UPDATE webhook_events SET status='PROCESSING',attempts=attempts+1,last_error=NULL,next_attempt_at=NULL WHERE id=$1`, eventID); err != nil {
-			return false, fmt.Errorf("retry webhook event: %w", err)
-		}
 	} else if err != nil {
 		return false, fmt.Errorf("persist webhook event: %w", err)
-	} else {
-		if _, err := tx.Exec(ctx, `UPDATE webhook_events SET status='PROCESSING',attempts=attempts+1 WHERE id=$1`, eventID); err != nil {
-			return false, fmt.Errorf("start webhook processing: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return false, fmt.Errorf("commit webhook intake: %w", err)
+	}
+	duplicate, err := s.processStoredWebhook(ctx, eventID)
+	if err != nil {
+		s.recordWebhookFailure(eventID, err)
+		return false, err
+	}
+	return duplicate, nil
+}
+
+func (s *WebhookStore) processStoredWebhook(ctx context.Context, eventID int64) (bool, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return false, fmt.Errorf("begin webhook processing: %w", err)
+	}
+	defer tx.Rollback(context.Background())
+	var merchantID int64
+	var provider, eventType, status string
+	var payload []byte
+	if err := tx.QueryRow(ctx, `SELECT merchant_id,provider,event_type,status,payload FROM webhook_events WHERE id=$1 FOR UPDATE`, eventID).Scan(&merchantID, &provider, &eventType, &status, &payload); err != nil {
+		return false, fmt.Errorf("load webhook event: %w", err)
+	}
+	if status == "PROCESSED" {
+		if err := tx.Commit(ctx); err != nil {
+			return false, err
 		}
+		return true, nil
+	}
+	var event application.WebhookEvent
+	if err := json.Unmarshal(payload, &event); err != nil {
+		return false, fmt.Errorf("decode stored webhook event: %w", err)
+	}
+	if event.Type != eventType {
+		return false, fmt.Errorf("stored webhook event type mismatch")
+	}
+	if _, err := tx.Exec(ctx, `UPDATE webhook_events SET status='PROCESSING',attempts=attempts+1,last_error=NULL,next_attempt_at=NULL WHERE id=$1`, eventID); err != nil {
+		return false, fmt.Errorf("start webhook processing: %w", err)
 	}
 	var intentID int64
 	var publicID, intentStatus, attemptStatus string
@@ -102,6 +135,55 @@ func (s *WebhookStore) ProcessWebhook(ctx context.Context, merchantID int64, pro
 		return false, fmt.Errorf("commit webhook transaction: %w", err)
 	}
 	return false, nil
+}
+
+// RetryDueWebhookEvents processes a bounded batch of durable intake records.
+func (s *WebhookStore) RetryDueWebhookEvents(ctx context.Context, limit int) (processed, failed int, err error) {
+	if limit < 1 || limit > 1000 {
+		return 0, 0, fmt.Errorf("webhook retry batch size must be between 1 and 1000")
+	}
+	rows, err := s.pool.Query(ctx, `SELECT id FROM webhook_events WHERE status IN ('RECEIVED','FAILED') AND (next_attempt_at IS NULL OR next_attempt_at <= now()) ORDER BY COALESCE(next_attempt_at,received_at),id LIMIT $1`, limit)
+	if err != nil {
+		return 0, 0, fmt.Errorf("select due webhook events: %w", err)
+	}
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return 0, 0, fmt.Errorf("scan due webhook event: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return 0, 0, fmt.Errorf("read due webhook events: %w", err)
+	}
+	rows.Close()
+	for _, id := range ids {
+		if ctx.Err() != nil {
+			return processed, failed, ctx.Err()
+		}
+		_, processErr := s.processStoredWebhook(ctx, id)
+		if processErr != nil {
+			s.recordWebhookFailure(id, processErr)
+			failed++
+			continue
+		}
+		processed++
+	}
+	return processed, failed, nil
+}
+
+func (s *WebhookStore) recordWebhookFailure(eventID int64, cause error) {
+	message := cause.Error()
+	if len(message) > 500 {
+		message = message[:500]
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	_, _ = s.pool.Exec(ctx, `UPDATE webhook_events SET status='FAILED',attempts=attempts+1,last_error=$2,
+		next_attempt_at=now()+make_interval(secs => LEAST(3600,5*power(2,LEAST(attempts,10)))::double precision) WHERE id=$1 AND status<>'PROCESSED'`, eventID, message)
 }
 
 func stringsLower(value string) string {

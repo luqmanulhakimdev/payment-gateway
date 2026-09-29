@@ -16,6 +16,7 @@ Pragmatic hexagonal architecture separates domain, application ports, infrastruc
 - HMAC-SHA256 webhook signature verifier with constant-time comparison and timestamp tolerance
 - Signed webhook intake with encrypted merchant secrets, persistent event deduplication, and transactional payment state updates
 - Batch reconciliation for stale pending attempts against the provider's stable idempotency reference
+- Durable webhook intake with persisted failures, capped exponential retry scheduling, and a bounded retry worker command
 - Merchant-scoped partial/full refund API with idempotency, locked refund reservations, mock provider refunds, and audit records
 - Merchant-scoped payment status lookup with per-operation rate limiting
 - Docker Compose and GitHub Actions CI with PostgreSQL migration integration tests
@@ -73,6 +74,7 @@ Compose credentials are for local development only. Do not reuse them outside lo
 | `WEBHOOK_ENCRYPTION_KEY` | Base64 encoded 32 byte key used to encrypt merchant webhook secrets | Local development key in `.env.example` |
 | `RECONCILIATION_OLDER_THAN` | Minimum age for pending attempts selected by reconciliation | `5m` |
 | `RECONCILIATION_BATCH_SIZE` | Maximum attempts per reconciliation run | `100` |
+| `WEBHOOK_RETRY_BATCH_SIZE` | Maximum due webhook events per retry run | `100` |
 | `RATE_LIMIT_REQUESTS` | Requests per merchant and endpoint scope in each window | `60` |
 | `RATE_LIMIT_WINDOW` | Fixed rate-limit window as a Go duration | `1m` |
 
@@ -119,4 +121,4 @@ Authenticated merchant endpoints use a PostgreSQL fixed-window counter, scoped b
 
 ## Future improvements
 
-Add queued webhook delivery with backoff and dead-letter handling, reconciliation for refunds that remain pending after provider timeouts, operational metrics and tracing, and adapters for production payment providers. The current webhook endpoint persists and processes each verified event transactionally in the request; provider retries can safely repeat an event after a failed transaction.
+Add dead-letter policy and monitoring for repeatedly failing webhook events, reconciliation for refunds that remain pending after provider timeouts, operational metrics and tracing, and adapters for production payment providers. The webhook endpoint persists each verified event before processing; a scheduled worker retries persisted failures with capped exponential backoff, and provider retries can safely repeat events.
