@@ -154,7 +154,7 @@ func (tx *refundTransaction) FinalizeRefund(ctx context.Context, merchantID int6
 		}
 	}
 	if _, err := tx.tx.Exec(ctx, `INSERT INTO audit_logs(merchant_id,actor_type,actor_id,action,entity_type,entity_id,details)
-		VALUES($1,'merchant_api',NULL,'refund.succeeded','refund',$2,jsonb_build_object('payment_intent_id',$3,'amount_minor',$4,'currency',$5))`, merchantID, refundID, intentID, refund.AmountMinor, refund.Currency); err != nil {
+		VALUES($1,'merchant_api',NULL,'refund.succeeded','refund',$2,jsonb_build_object('payment_intent_id',$3::text,'amount_minor',$4::bigint,'currency',$5::text))`, merchantID, refundID, intentID, refund.AmountMinor, refund.Currency); err != nil {
 		return application.Refund{}, fmt.Errorf("audit refund: %w", err)
 	}
 	refund.Status = "SUCCEEDED"

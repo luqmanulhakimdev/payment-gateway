@@ -113,16 +113,17 @@ func (tx *intentTransaction) CreateIntent(ctx context.Context, record applicatio
 	return intent, nil
 }
 
-func (tx *intentTransaction) CompleteIdempotency(ctx context.Context, merchantID int64, key string, statusCode int, body []byte, paymentIntentID int64) error {
-	tag, err := tx.tx.Exec(ctx, `UPDATE idempotency_keys SET response_status = $3, response_body = $4::jsonb, payment_intent_id = $5
-		WHERE merchant_id = $1 AND idempotency_key = $2`, merchantID, key, statusCode, string(body), paymentIntentID)
+func (tx *intentTransaction) CompleteIdempotency(ctx context.Context, merchantID int64, key string, statusCode int, body []byte, paymentIntentID int64) ([]byte, error) {
+	var storedBody []byte
+	err := tx.tx.QueryRow(ctx, `UPDATE idempotency_keys SET response_status = $3, response_body = $4::jsonb, payment_intent_id = $5
+		WHERE merchant_id = $1 AND idempotency_key = $2 RETURNING response_body`, merchantID, key, statusCode, string(body), paymentIntentID).Scan(&storedBody)
 	if err != nil {
-		return fmt.Errorf("complete idempotency response: %w", err)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, domain.ErrIdempotencyInProgress
+		}
+		return nil, fmt.Errorf("complete idempotency response: %w", err)
 	}
-	if tag.RowsAffected() != 1 {
-		return domain.ErrIdempotencyInProgress
-	}
-	return nil
+	return storedBody, nil
 }
 
 var _ application.IntentStore = (*IntentStore)(nil)

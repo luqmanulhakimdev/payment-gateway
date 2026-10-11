@@ -20,7 +20,7 @@ var (
 type IntentTransaction interface {
 	ReserveIdempotency(context.Context, int64, string, [32]byte, time.Time) (IdempotencyReservation, error)
 	CreateIntent(context.Context, IntentRecord) (CreatedIntent, error)
-	CompleteIdempotency(context.Context, int64, string, int, []byte, int64) error
+	CompleteIdempotency(context.Context, int64, string, int, []byte, int64) ([]byte, error)
 }
 
 type IntentStore interface {
@@ -105,10 +105,14 @@ func (c *CreateIntent) Execute(ctx context.Context, merchantID int64, key string
 		if err != nil {
 			return fmt.Errorf("encode payment intent: %w", err)
 		}
-		if err := tx.CompleteIdempotency(ctx, merchantID, key, 201, body, intent.DatabaseID); err != nil {
+		storedBody, err := tx.CompleteIdempotency(ctx, merchantID, key, 201, body, intent.DatabaseID)
+		if err != nil {
 			return err
 		}
-		result = CreateIntentResult{StatusCode: 201, Body: body}
+		if len(storedBody) == 0 {
+			storedBody = body
+		}
+		result = CreateIntentResult{StatusCode: 201, Body: storedBody}
 		return nil
 	})
 	if err != nil {
