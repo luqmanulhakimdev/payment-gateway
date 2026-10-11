@@ -1,0 +1,121 @@
+package httpapi
+
+import (
+	"context"
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/luqmanulhakimdev/payment-gateway/internal/application"
+)
+
+type merchantAuthFunc func(context.Context, string) (int64, error)
+
+func (f merchantAuthFunc) Authenticate(ctx context.Context, key string) (int64, error) {
+	return f(ctx, key)
+}
+
+type rateLimitFunc func(context.Context, int64, string) (bool, time.Duration, error)
+
+func (f rateLimitFunc) Check(ctx context.Context, merchantID int64, scope string) (bool, time.Duration, error) {
+	return f(ctx, merchantID, scope)
+}
+
+type paymentStatusStoreFunc func(context.Context, int64, string) (application.PaymentStatusView, error)
+
+func (f paymentStatusStoreFunc) GetPaymentStatus(ctx context.Context, merchantID int64, intentID string) (application.PaymentStatusView, error) {
+	return f(ctx, merchantID, intentID)
+}
+
+func TestHealthz(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	NewRouter(nil, nil, nil, nil, nil, nil, nil, nil).ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+	if recorder.Code != http.StatusOK || recorder.Body.String() != "ok\n" {
+		t.Fatalf("unexpected health response: %d %q", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestReadiness(t *testing.T) {
+	for _, tt := range []struct {
+		name  string
+		check func(context.Context) error
+		want  int
+	}{
+		{"ready", func(context.Context) error { return nil }, http.StatusOK},
+		{"database unavailable", func(context.Context) error { return errors.New("unavailable") }, http.StatusServiceUnavailable},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			NewRouter(tt.check, nil, nil, nil, nil, nil, nil, nil).ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+			if recorder.Code != tt.want {
+				t.Fatalf("status = %d, want %d", recorder.Code, tt.want)
+			}
+		})
+	}
+}
+
+func TestCreateIntentRejectsUnknownCardFields(t *testing.T) {
+	router := NewRouter(nil, application.NewCreateIntent(nil), merchantAuthFunc(func(context.Context, string) (int64, error) { return 1, nil }), nil, nil, nil, nil, nil)
+	request := httptest.NewRequest(http.MethodPost, "/v1/payment-intents", strings.NewReader(`{"amount_minor":1000,"currency":"IDR","card_number":"4111111111111111"}`))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Authorization", "Bearer key")
+	request.Header.Set("Idempotency-Key", "test-key")
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusBadRequest)
+	}
+}
+
+func TestCreateIntentRequiresMerchantAuthentication(t *testing.T) {
+	router := NewRouter(nil, application.NewCreateIntent(nil), merchantAuthFunc(func(context.Context, string) (int64, error) {
+		return 0, application.ErrInvalidMerchant
+	}), nil, nil, nil, nil, nil)
+	request := httptest.NewRequest(http.MethodPost, "/v1/payment-intents", strings.NewReader(`{"amount_minor":1000,"currency":"IDR"}`))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Authorization", "Bearer invalid-key")
+	request.Header.Set("Idempotency-Key", "test-key")
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusUnauthorized)
+	}
+}
+
+func TestCreateIntentReturnsRetryAfterWhenRateLimited(t *testing.T) {
+	router := NewRouter(nil, application.NewCreateIntent(nil), merchantAuthFunc(func(context.Context, string) (int64, error) { return 7, nil }), nil, nil, nil, rateLimitFunc(func(_ context.Context, merchantID int64, scope string) (bool, time.Duration, error) {
+		if merchantID != 7 || scope != "payment-intents" {
+			t.Fatalf("rate limit scope=(%d,%q)", merchantID, scope)
+		}
+		return false, 1500 * time.Millisecond, nil
+	}), nil)
+	request := httptest.NewRequest(http.MethodPost, "/v1/payment-intents", strings.NewReader(`{}`))
+	request.Header.Set("Authorization", "Bearer key")
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Idempotency-Key", "test-key")
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusTooManyRequests || recorder.Header().Get("Retry-After") != "2" {
+		t.Fatalf("status=%d Retry-After=%q body=%s", recorder.Code, recorder.Header().Get("Retry-After"), recorder.Body.String())
+	}
+}
+
+func TestPaymentStatusIsMerchantScoped(t *testing.T) {
+	query := application.NewGetPaymentStatus(paymentStatusStoreFunc(func(_ context.Context, merchantID int64, intentID string) (application.PaymentStatusView, error) {
+		if merchantID != 7 || intentID != "pi_123" {
+			t.Fatalf("query scope=(%d,%q)", merchantID, intentID)
+		}
+		return application.PaymentStatusView{ID: intentID, AmountMinor: 1234, Currency: "IDR", Status: "PAID"}, nil
+	}))
+	router := NewRouter(nil, nil, merchantAuthFunc(func(context.Context, string) (int64, error) { return 7, nil }), nil, nil, nil, nil, query)
+	request := httptest.NewRequest(http.MethodGet, "/v1/payment-intents/pi_123", nil)
+	request.Header.Set("Authorization", "Bearer key")
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), `"status":"PAID"`) {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+}

@@ -5,3 +5,4 @@
 /coverage.out
 *.log
 .DS_Store
+/api

@@ -1,0 +1,54 @@
+package application
+
+import (
+	"context"
+	"errors"
+)
+
+var ErrInvalidProviderRequest = errors.New("invalid payment provider request")
+
+type ProviderRequest struct {
+	PaymentIntentID string
+	AttemptID       int64
+	AmountMinor     int64
+	Currency        string
+	IdempotencyKey  string
+}
+
+type ProviderStatus string
+
+const ProviderAuthorized ProviderStatus = "AUTHORIZED"
+const ProviderPaid ProviderStatus = "PAID"
+const ProviderFailed ProviderStatus = "FAILED"
+
+type ProviderResult struct {
+	Reference string
+	Status    ProviderStatus
+}
+
+// PaymentProvider is the outbound port used to start a provider-side payment.
+// It deliberately has no field for card numbers, CVV, or raw credentials.
+type PaymentProvider interface {
+	Name() string
+	CreatePayment(context.Context, ProviderRequest) (ProviderResult, error)
+}
+
+type RefundProviderRequest struct {
+	PaymentIntentID   string
+	ProviderReference string
+	AmountMinor       int64
+	Currency          string
+	IdempotencyKey    string
+}
+
+type RefundProviderResult struct{ Reference string }
+
+type RefundProvider interface {
+	Refund(context.Context, RefundProviderRequest) (RefundProviderResult, error)
+}
+
+// PaymentReconciler looks up a previously submitted attempt by its stable provider idempotency key.
+type PaymentReconciler interface {
+	Name() string
+	LookupPayment(context.Context, ProviderRequest) (ProviderResult, error)
+}

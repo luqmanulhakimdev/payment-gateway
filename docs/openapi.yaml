@@ -1,0 +1,243 @@
+openapi: 3.1.0
+info:
+  title: Payment Gateway API
+  version: 0.1.0
+  description: Portfolio and educational payment gateway. Do not submit card data.
+servers:
+  - url: http://localhost:8081
+paths:
+  /healthz:
+    get:
+      operationId: healthCheck
+      summary: Check process health
+      responses:
+        '200':
+          description: The HTTP process is running
+          content:
+            text/plain:
+              schema:
+                type: string
+              example: ok
+  /readyz:
+    get:
+      operationId: readinessCheck
+      summary: Check database readiness
+      responses:
+        '200':
+          description: Database is reachable
+          content:
+            text/plain:
+              schema:
+                type: string
+              example: ready
+        '503':
+          description: Database is unavailable
+  /v1/payment-intents:
+    post:
+      operationId: createPaymentIntent
+      summary: Create an idempotent payment intent
+      security:
+        - MerchantBearer: []
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 255
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreatePaymentIntentRequest'
+      responses:
+        '201':
+          description: Payment intent created or replayed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaymentIntent'
+        '400':
+          description: Invalid request or missing idempotency key
+        '401':
+          description: Merchant API key is invalid
+        '404':
+          description: Customer does not exist for this merchant
+        '409':
+          description: Idempotency key was used for a different request
+        '415':
+          description: Content type must be application/json
+        '500':
+          description: Payment intent could not be created
+        '429': { description: Merchant rate limit exceeded; see Retry-After }
+        '503': { description: Rate limit storage unavailable }
+  /v1/payment-intents/{intentID}/refunds:
+    post:
+      operationId: createRefund
+      summary: Refund part or all of a paid payment intent
+      description: Reserves the requested amount, calls the configured provider with a stable idempotency key, and records the result. Same key and body replays the original refund.
+      security:
+        - MerchantBearer: []
+      parameters:
+        - name: intentID
+          in: path
+          required: true
+          schema: { type: string, minLength: 1 }
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema: { type: string, minLength: 1, maxLength: 255 }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateRefundRequest'
+      responses:
+        '201': { description: Refund created or replayed }
+        '400': { description: Invalid request or missing idempotency key }
+        '401': { description: Merchant API key is invalid }
+        '404': { description: Paid payment not found }
+        '409': { description: Payment is not refundable, amount exceeds remaining captured value, or key conflicts }
+        '415': { description: Content-Type must be application/json }
+        '502': { description: Refund provider unavailable; retry with the same key }
+        '500': { description: Internal refund processing failure }
+        '429': { description: Merchant rate limit exceeded; see Retry-After }
+        '503': { description: Rate limit storage unavailable }
+  /v1/payment-intents/{intentID}:
+    get:
+      operationId: getPaymentIntentStatus
+      summary: Get a merchant-scoped payment intent status
+      security: [{ MerchantBearer: [] }]
+      parameters:
+        - { name: intentID, in: path, required: true, schema: { type: string, minLength: 1 } }
+      responses:
+        '200':
+          description: Current payment intent status
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PaymentIntentStatus' }
+        '401': { description: Merchant API key is invalid }
+        '404': { description: Payment intent not found for this merchant }
+        '429': { description: Merchant rate limit exceeded; see Retry-After }
+        '503': { description: Rate limit storage unavailable }
+  /v1/payment-intents/{intentID}/attempts:
+    post:
+      operationId: createPaymentAttempt
+      summary: Start an idempotent provider payment attempt
+      description: The mock provider authorizes the attempt without accepting card data. Payment completion is asynchronous and is set through a verified provider webhook.
+      security: [{ MerchantBearer: [] }]
+      parameters:
+        - { name: intentID, in: path, required: true, schema: { type: string, minLength: 1 } }
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema: { type: string, minLength: 1, maxLength: 255 }
+      responses:
+        '201': { description: Attempt authorized or replayed }
+        '400': { description: Invalid or missing idempotency key }
+        '401': { description: Merchant API key is invalid }
+        '404': { description: Payment intent not found }
+        '409': { description: Payment intent cannot accept another attempt }
+        '502': { description: Provider unavailable; retry with the same key }
+        '429': { description: Merchant rate limit exceeded; see Retry-After }
+        '503': { description: Rate limit storage unavailable }
+  /v1/webhooks/{merchantID}/{provider}:
+    post:
+      operationId: receivePaymentWebhook
+      summary: Receive a signed payment provider event
+      description: Verifies Payment-Signature over the timestamp and exact request bytes. Supports payment.paid and payment.failed with only id, type, and payment_reference fields. Duplicate processed event IDs are acknowledged without repeating payment updates.
+      parameters:
+        - { name: merchantID, in: path, required: true, schema: { type: integer, format: int64, minimum: 1 } }
+        - { name: provider, in: path, required: true, schema: { type: string, minLength: 1, maxLength: 50 } }
+        - { name: Payment-Signature, in: header, required: true, schema: { type: string, example: 't=1800000000,v1=hex_hmac_sha256' } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [id, type, payment_reference]
+              properties:
+                id: { type: string, maxLength: 200 }
+                type: { type: string, enum: [payment.paid, payment.failed] }
+                payment_reference: { type: string, maxLength: 200 }
+      responses:
+        '200': { description: Event processed or already processed; duplicate responses include Idempotent-Replay true }
+        '400': { description: Invalid signed event payload }
+        '401': { description: Signature invalid or merchant unavailable }
+        '409': { description: Event ID was previously used with different content }
+        '500': { description: Event processing failed; provider may retry }
+        '429': { description: Signed merchant webhook rate limit exceeded; see Retry-After }
+        '503': { description: Rate limit storage unavailable }
+components:
+  securitySchemes:
+    MerchantBearer:
+      type: http
+      scheme: bearer
+      bearerFormat: random merchant API key
+  schemas:
+    PaymentIntentStatus:
+      type: object
+      additionalProperties: false
+      required: [id, amount_minor, currency, status, created_at, updated_at]
+      properties:
+        id: { type: string }
+        amount_minor: { type: integer, format: int64 }
+        currency: { type: string, minLength: 3, maxLength: 3 }
+        status: { type: string, enum: [CREATED, PENDING, AUTHORIZED, PAID, FAILED, EXPIRED, CANCELLED, REFUNDED] }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    CreatePaymentIntentRequest:
+      type: object
+      additionalProperties: false
+      required: [amount_minor, currency]
+      properties:
+        amount_minor:
+          type: integer
+          format: int64
+          minimum: 1
+        currency:
+          type: string
+          pattern: '^[A-Z]{3}$'
+        customer_ref:
+          type: string
+          maxLength: 128
+        description:
+          type: string
+          maxLength: 255
+        metadata:
+          type: object
+          maxProperties: 50
+          additionalProperties:
+            type: string
+            maxLength: 500
+    PaymentIntent:
+      type: object
+      required: [id, status, amount_minor, currency, created_at]
+      properties:
+        id:
+          type: string
+          example: pi_8bdf9f
+        status:
+          type: string
+          enum: [CREATED, PENDING, AUTHORIZED, PAID, FAILED, EXPIRED, CANCELLED, REFUNDED]
+        amount_minor:
+          type: integer
+          format: int64
+        currency:
+          type: string
+          pattern: '^[A-Z]{3}$'
+        created_at:
+          type: string
+          format: date-time
+    CreateRefundRequest:
+      type: object
+      additionalProperties: false
+      required: [amount_minor]
+      properties:
+        amount_minor: { type: integer, format: int64, minimum: 1 }
+        reason: { type: string, maxLength: 500 }
